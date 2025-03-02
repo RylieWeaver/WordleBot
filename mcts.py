@@ -9,11 +9,23 @@ from simulation_utils import make_probs, wordle_step
 #                            MCTS Node Class
 ##############################################################################
 
+
 class MCTSNode:
     """
     Represents a single node in the MCTS tree for one environment/state.
     """
-    def __init__(self, alphabet_state, guess_state, guess_num, guess_word, target_word, parent=None, prior=0.0, reward=0.0):
+
+    def __init__(
+        self,
+        alphabet_state,
+        guess_state,
+        guess_num,
+        guess_word,
+        target_word,
+        parent=None,
+        prior=0.0,
+        reward=0.0,
+    ):
         """
         Args:
             state: A Python object or tensor that represents the environment state.
@@ -48,12 +60,12 @@ class MCTSNode:
     def expand(self, actor_critic_net, vocab, alpha, temperature, top_k=50):
         """
         Create children for this node by querying the policy network on this node's state.
-        
+
         Args:
             actor_critic_net: model that will return (logits, value).
             vocab: List of all possible actions (words).
             alpha, temperature: Exploration parameters for the policy.
-            top_k: How many actions from the policy to expand to children. 
+            top_k: How many actions from the policy to expand to children.
         """
         if self.is_terminal():
             return  # no need to expand
@@ -78,15 +90,15 @@ class MCTSNode:
             child = MCTSNode(
                 alphabet_state=new_alphabet_state,
                 guess_state=new_guess_state,
-                guess_num=self.guess_num+1,
+                guess_num=self.guess_num + 1,
                 guess_word=guess_word,
                 target_word=target_word,
                 parent=self,
                 prior=action_prior,
-                reward=reward
+                reward=reward,
             )
             self.children[idx] = child
-    
+
     def evaluate(self, actor_critic_net, gamma=1.0):
         """
         Estimate the node's value using the critic and the immediate reward.
@@ -104,6 +116,7 @@ class MCTSNode:
 ##############################################################################
 #                           MCTS Utilities
 ##############################################################################
+
 
 def select_child_via_ucb(node, c_puct=1.0):
     """
@@ -125,13 +138,15 @@ def select_child_via_ucb(node, c_puct=1.0):
             best_child = child
     return best_child
 
+
 def rollout_or_value_estimate(node, actor_critic_net):
     """
-    Simple function to return a value estimate for a node. 
+    Simple function to return a value estimate for a node.
     Could be a full environment rollout or a direct critic call.
     """
     value_est = node.evaluate(actor_critic_net)
     return value_est
+
 
 def backpropagate(path, value_est):
     """
@@ -158,12 +173,12 @@ def mcts_search(
     temperature,
     num_simulations=30,
     top_k=30,
-    c_puct=1.0
+    c_puct=1.0,
 ):
     """
-    Run MCTS starting from the given root state for a single environment 
+    Run MCTS starting from the given root state for a single environment
     (i.e., one puzzle) and pick the best action (child).
-    
+
     Args:
         root_alphabet_state: Tensor [1, 26, 11] for Wordle's letter info at the root.
         root_guess_state:    Tensor [1, max_guesses] for which guess number is active.
@@ -187,7 +202,7 @@ def mcts_search(
         target_word=target_word,
         parent=None,
         prior=1.0,
-        reward=0.0
+        reward=0.0,
     )
     # Expand it once to get initial children
     root_node.expand(actor_critic_net, vocab, alpha, temperature, top_k=top_k)
@@ -222,3 +237,41 @@ def mcts_search(
             best_action_idx = action_idx
 
     return best_action_idx
+
+
+# def select_actions_with_mcts(
+#     actor_critic_net,
+#     batch_alphabet_states,
+#     batch_guess_states,
+#     batch_guess_nums,
+#     batch_target_words,
+#     vocab,
+#     alpha,
+#     temperature,
+#     num_simulations=30,
+#     top_k=50,
+#     c_puct=1.0
+# ):
+#     # we do a loop over batch_size, calling MCTS for each environment,
+#     # then return the chosen guess index for each environment
+#     batch_size = len(batch_alphabet_states)
+#     guess_indices = []
+
+#     for i in range(batch_size):
+#         best_idx = mcts_search(
+#             root_alphabet_state=batch_alphabet_states[i],
+#             root_guess_state=batch_guess_states[i],
+#             guess_num=batch_guess_nums[i],
+#             target_word=batch_target_words[i],
+#             actor_critic_net=actor_critic_net,
+#             vocab=vocab,
+#             alpha=alpha,
+#             temperature=temperature,
+#             num_simulations=num_simulations,
+#             top_k=top_k,
+#             c_puct=c_puct
+#         )
+#         guess_indices.append(best_idx)
+
+#     guess_words = [vocab[idx] for idx in guess_indices]
+#     return guess_indices, guess_words

@@ -14,9 +14,9 @@ def examine_gradients(actor_critic_net):
 
     # Display results
     for name, grad_percentiles in gradient_data:
-        print(f"Parameter: {name}")
+        print(f'Parameter: {name}')
         for p, value in zip(percentiles, grad_percentiles):
-            print(f"  {p}th percentile value: {value:.6f}")
+            print(f'  {p}th percentile value: {value:.6f}')
         print()
 
 
@@ -34,7 +34,7 @@ def examine_parameters(actor_critic_net):
 
     # Display results
     for name, param_percentiles in parameter_data:
-        print(f"Parameter: {name}")
+        print(f'Parameter: {name}')
         for p, value in zip(percentiles, param_percentiles):
-            print(f"  {p}th percentile value: {value:.6f}")
+            print(f'  {p}th percentile value: {value:.6f}')
         print()

@@ -22,7 +22,7 @@ def train(
     actor_coef=0.5,
     critic_coef=1.0,
     entropy_coef=0.03,
-    kl_coef=0.03
+    kl_coef=0.03,
 ):
     """
     Actor-Critic train loop with single-episode simulation,
@@ -52,7 +52,6 @@ def train(
     best_test_critic_loss = float('inf')
     no_improve_count = 0
 
-
     for epoch in range(epochs):
         # ------------------- INSTANTIATE POLICIES -------------------
         old_policy_net = copy.deepcopy(actor_critic_net).eval()  # freeze old policy
@@ -60,18 +59,40 @@ def train(
 
         for batch_idx, target_words in enumerate(train_loader):
             # -------- Run episodes using the old policy --------
-            states_batch, old_probs_batch, rewards_batch, guess_mask_batch, guess_words_batch, active_mask_batch = collect_episodes(
-                old_policy_net, vocab, target_words, alpha, temperature, max_guesses, argmax=False
+            (states_batch, old_probs_batch, rewards_batch, guess_mask_batch, guess_words_batch, active_mask_batch,) = collect_episodes(
+                old_policy_net,
+                vocab,
+                target_words,
+                alpha,
+                temperature,
+                max_guesses,
+                argmax=False,
             )
 
             # ---------------- Process Episodes ----------------
             advantages_batch, probs_batch = process_episodes(
-                actor_critic_net, states_batch, rewards_batch, active_mask_batch, alpha, temperature, gamma, lam
+                actor_critic_net,
+                states_batch,
+                rewards_batch,
+                active_mask_batch,
+                alpha,
+                temperature,
+                gamma,
+                lam,
             )
 
             # -------------- Compute Loss --------------
-            loss, actor_loss, critic_loss, entropy_loss, kl_loss = calculate_loss(
-                advantages_batch, old_probs_batch, probs_batch, actor_coef, critic_coef, entropy_coef, kl_coef, guess_mask_batch, active_mask_batch, norm=True
+            (loss, actor_loss, critic_loss, entropy_loss, kl_loss,) = calculate_loss(
+                advantages_batch,
+                old_probs_batch,
+                probs_batch,
+                actor_coef,
+                critic_coef,
+                entropy_coef,
+                kl_coef,
+                guess_mask_batch,
+                active_mask_batch,
+                norm=True,
             )
 
             # -------------- Backprop --------------
@@ -81,7 +102,7 @@ def train(
             optimizer.step()
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
-        test_loss, test_actor_loss, test_critic_loss, test_entropy_loss, test_kl_loss, test_accuracy = test(
+        (test_loss, test_actor_loss, test_critic_loss, test_entropy_loss, test_kl_loss, test_accuracy,) = test(
             actor_critic_net,
             test_loader,
             vocab,
@@ -93,16 +114,11 @@ def train(
             actor_coef,
             0.0,  # No critic loss in evaluation
             0.0,  # No entropy loss in evaluation
-            0.0   # No KL loss in evaluation
+            0.0,  # No KL loss in evaluation
         )
 
         # ---------------- Print Training Progress ----------------
-        print(
-            f"Epoch {epoch}/{epochs} | "
-            f"Loss: {test_loss:.4f} | "
-            f"Acc: {test_accuracy:.2%} | "
-            f"alpha={alpha:.2f}, temp={temperature:.2f}"
-        )
+        print(f'Epoch {epoch}/{epochs} | ' f'Loss: {test_loss:.4f} | ' f'Acc: {test_accuracy:.2%} | ' f'alpha={alpha:.2f}, temp={temperature:.2f}')
 
         # ---------------- Evolve Learning ----------------
         # Check improvement on test loss
@@ -115,12 +131,21 @@ def train(
 
         # If no improvement on test loss for 'patience' epochs => decay LR / evolve policy params alpha, temperature
         if no_improve_count >= patience:
-            alpha, temperature, best_test_actor_loss, best_test_critic_loss = evolve_learning_params(
-                optimizer, alpha, min_alpha, temperature, min_temperature, lr, min_lr, lr_decay_factor, best_test_actor_loss, best_test_critic_loss
+            (alpha, temperature, best_test_actor_loss, best_test_critic_loss,) = evolve_learning_params(
+                optimizer,
+                alpha,
+                min_alpha,
+                temperature,
+                min_temperature,
+                lr,
+                min_lr,
+                lr_decay_factor,
+                best_test_actor_loss,
+                best_test_critic_loss,
             )
             no_improve_count = 0
 
-    print("Training complete!")
+    print('Training complete!')
 
 
 def test(
@@ -135,7 +160,7 @@ def test(
     actor_coef=0.5,
     critic_coef=0.0,
     entropy_coef=0.0,
-    kl_coef=0.0
+    kl_coef=0.0,
 ):
     """
     Evaluate the model on the entire test_loader dataset.
@@ -155,18 +180,40 @@ def test(
     with torch.no_grad():
         for batch_idx, target_words in enumerate(test_loader):
             # -------- Run episodes --------
-            states_batch, probs_batch, rewards_batch, guess_mask_batch, guess_words_batch, active_mask_batch = collect_episodes(
-                actor_critic_net, vocab, target_words, alpha, temperature, max_guesses, argmax=True
+            (states_batch, probs_batch, rewards_batch, guess_mask_batch, guess_words_batch, active_mask_batch,) = collect_episodes(
+                actor_critic_net,
+                vocab,
+                target_words,
+                alpha,
+                temperature,
+                max_guesses,
+                argmax=True,
             )
 
             # ---------------- Process Episodes ----------------
             advantages_batch, probs_batch = process_episodes(
-                actor_critic_net, states_batch, rewards_batch, active_mask_batch, alpha, temperature, gamma, lam
+                actor_critic_net,
+                states_batch,
+                rewards_batch,
+                active_mask_batch,
+                alpha,
+                temperature,
+                gamma,
+                lam,
             )
 
             # -------------- Compute Loss --------------
-            batch_loss, batch_actor_loss, batch_critic_loss, batch_entropy_loss, batch_kl_loss, = calculate_loss(
-                advantages_batch, probs_batch, probs_batch, actor_coef, critic_coef, entropy_coef, kl_coef, guess_mask_batch, active_mask_batch, norm=True
+            (batch_loss, batch_actor_loss, batch_critic_loss, batch_entropy_loss, batch_kl_loss,) = calculate_loss(
+                advantages_batch,
+                probs_batch,
+                probs_batch,
+                actor_coef,
+                critic_coef,
+                entropy_coef,
+                kl_coef,
+                guess_mask_batch,
+                active_mask_batch,
+                norm=True,
             )
             test_loss += batch_loss.item()
             test_actor_loss += batch_actor_loss.item()
@@ -184,4 +231,11 @@ def test(
     avg_test_kl_loss = test_kl_loss / len(test_loader)
     test_accuracy = test_correct / test_samples
 
-    return avg_test_loss, avg_test_actor_loss, avg_test_critic_loss, avg_test_entropy_loss, avg_test_kl_loss, test_accuracy
+    return (
+        avg_test_loss,
+        avg_test_actor_loss,
+        avg_test_critic_loss,
+        avg_test_entropy_loss,
+        avg_test_kl_loss,
+        test_accuracy,
+    )

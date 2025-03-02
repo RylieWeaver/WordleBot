@@ -4,6 +4,7 @@
 
 import torch
 
+
 ############################################
 # STATE UTILS
 ############################################
@@ -13,7 +14,7 @@ def update_letter_state(
     state_green_idx,
     guess_green_idx,
     state_yellow_idx,
-    guess_yellow_idx
+    guess_yellow_idx,
 ):
     """
     Extracted verbatim from the original code's merging logic.
@@ -77,7 +78,7 @@ def update_alphabet_state(given_alphabet_state, guess_word, target_word):
       reward: float (based on discovered info + correct guess)
       done: bool
     """
-    alphabet = "abcdefghijklmnopqrstuvwxyz"
+    alphabet = 'abcdefghijklmnopqrstuvwxyz'
     new_alphabet_state = torch.zeros_like(given_alphabet_state)
 
     for i, (letter, old_letter_state) in enumerate(zip(alphabet, given_alphabet_state)):
@@ -98,11 +99,11 @@ def update_alphabet_state(given_alphabet_state, guess_word, target_word):
                 guess_letter_state[1] = 1  # Grey
 
         # Indices from the old letter state
-        state_green_idx  = [j + 7 for j, val in enumerate(old_letter_state[7:12]) if val == 1]
-        state_yellow_idx = [j + 2 for j, val in enumerate(old_letter_state[2:7])  if val == 1]
+        state_green_idx = [j + 7 for j, val in enumerate(old_letter_state[7:12]) if val == 1]
+        state_yellow_idx = [j + 2 for j, val in enumerate(old_letter_state[2:7]) if val == 1]
         # Indices from the guess
-        guess_green_idx  = [j + 7 for j, val in enumerate(guess_letter_state[7:12]) if val == 1]
-        guess_yellow_idx = [j + 2 for j, val in enumerate(guess_letter_state[2:7])  if val == 1]
+        guess_green_idx = [j + 7 for j, val in enumerate(guess_letter_state[7:12]) if val == 1]
+        guess_yellow_idx = [j + 2 for j, val in enumerate(guess_letter_state[2:7]) if val == 1]
 
         # Update letter state
         new_letter_state = update_letter_state(
@@ -111,7 +112,7 @@ def update_alphabet_state(given_alphabet_state, guess_word, target_word):
             state_green_idx,
             guess_green_idx,
             state_yellow_idx,
-            guess_yellow_idx
+            guess_yellow_idx,
         )
         new_alphabet_state[i] = new_letter_state
 
