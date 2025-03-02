@@ -9,11 +9,23 @@ from simulation_utils import make_probs, wordle_step
 #                            MCTS Node Class
 ##############################################################################
 
+
 class MCTSNode:
     """
     Represents a single node in the MCTS tree for one environment/state.
     """
-    def __init__(self, alphabet_state, guess_state, guess_num, guess_word, target_word, parent=None, prior=0.0, reward=0.0):
+
+    def __init__(
+        self,
+        alphabet_state,
+        guess_state,
+        guess_num,
+        guess_word,
+        target_word,
+        parent=None,
+        prior=0.0,
+        reward=0.0,
+    ):
         """
         Args:
             state: A Python object or tensor that represents the environment state.
@@ -23,7 +35,9 @@ class MCTSNode:
         """
         self.alphabet_state = alphabet_state  # shape [1, 26, 11]
         self.guess_state = guess_state  # shape [1, max_guesses]
-        self.state = torch.cat([alphabet_state.view(1, -1), guess_state], dim=-1)  # shape [1, 26*11 + max_guesses]
+        self.state = torch.cat(
+            [alphabet_state.view(1, -1), guess_state], dim=-1
+        )  # shape [1, 26*11 + max_guesses]
         self.guess_num = guess_num
         self.guess_word = guess_word
         self.target_word = target_word
@@ -48,12 +62,12 @@ class MCTSNode:
     def expand(self, actor_critic_net, vocab, alpha, temperature, top_k=50):
         """
         Create children for this node by querying the policy network on this node's state.
-        
+
         Args:
             actor_critic_net: model that will return (logits, value).
             vocab: List of all possible actions (words).
             alpha, temperature: Exploration parameters for the policy.
-            top_k: How many actions from the policy to expand to children. 
+            top_k: How many actions from the policy to expand to children.
         """
         if self.is_terminal():
             return  # no need to expand
@@ -74,19 +88,21 @@ class MCTSNode:
             action_prior = probs[0, idx.item()]  # shape: scalar
             target_word = self.target_word
             guess_word = vocab[idx]
-            new_alphabet_state, new_guess_state, reward, correct = wordle_step(self.alphabet_state, self.guess_state, guess_word, target_word)
+            new_alphabet_state, new_guess_state, reward, correct = wordle_step(
+                self.alphabet_state, self.guess_state, guess_word, target_word
+            )
             child = MCTSNode(
                 alphabet_state=new_alphabet_state,
                 guess_state=new_guess_state,
-                guess_num=self.guess_num+1,
+                guess_num=self.guess_num + 1,
                 guess_word=guess_word,
                 target_word=target_word,
                 parent=self,
                 prior=action_prior,
-                reward=reward
+                reward=reward,
             )
             self.children[idx] = child
-    
+
     def evaluate(self, actor_critic_net, gamma=1.0):
         """
         Estimate the node's value using the critic and the immediate reward.
@@ -105,12 +121,13 @@ class MCTSNode:
 #                           MCTS Utilities
 ##############################################################################
 
+
 def select_child_via_ucb(node, c_puct=1.0):
     """
     Select the child with the highest UCB score:
       UCB = Q + c_puct * prior * sqrt(parent_visits) / (1 + child.visit_count)
     """
-    best_score = -float('inf')
+    best_score = -float("inf")
     best_child = None
 
     parent_visits = max(1, node.visit_count)
@@ -118,20 +135,24 @@ def select_child_via_ucb(node, c_puct=1.0):
 
     for action_idx, child in node.children.items():
         q_value = child.value_avg
-        u_value = c_puct * child.prior * math.sqrt(parent_visits) / (1 + child.visit_count)
+        u_value = (
+            c_puct * child.prior * math.sqrt(parent_visits) / (1 + child.visit_count)
+        )
         score = q_value + u_value
         if score > best_score:
             best_score = score
             best_child = child
     return best_child
 
+
 def rollout_or_value_estimate(node, actor_critic_net):
     """
-    Simple function to return a value estimate for a node. 
+    Simple function to return a value estimate for a node.
     Could be a full environment rollout or a direct critic call.
     """
     value_est = node.evaluate(actor_critic_net)
     return value_est
+
 
 def backpropagate(path, value_est):
     """
@@ -148,77 +169,93 @@ def backpropagate(path, value_est):
 #                               MCTS Search
 ##############################################################################
 def mcts_search(
-    root_alphabet_state,
-    root_guess_state,
+    root_alphabet_states,
+    root_guess_states,
     guess_num,
-    target_word,
+    guess_mask_batch,
+    target_words,
     actor_critic_net,
     vocab,
     alpha,
     temperature,
     num_simulations=30,
     top_k=30,
-    c_puct=1.0
+    c_puct=1.0,
 ):
     """
-    Run MCTS starting from the given root state for a single environment 
-    (i.e., one puzzle) and pick the best action (child).
-    
+    Run MCTS starting from the given root state for a batch of
+    environments and pick the best actions.
+
     Args:
-        root_alphabet_state: Tensor [1, 26, 11] for Wordle's letter info at the root.
-        root_guess_state:    Tensor [1, max_guesses] for which guess number is active.
+        root_alphabet_state: shape [batch_size, 26, 11] for Wordle's letter info at the root.
+        root_guess_state:    shape [batch_size, max_guesses] for which guess number is active.
         guess_num:           Int, how many guesses used so far.
-        target_word:         String, the correct Wordle solution.
+        target_words:        String, the correct Wordle solution.
         actor_critic_net:    Model returning (logits, value).
         vocab:               List of possible guess words (actions).
-        alpha, temperature:  For 'make_probs' inside MCTS node expansion.
+        alpha, temperature:  Exploration parameters.
         num_simulations:     How many times to run the MCTS loop.
         top_k:               Expand top-K children at each node (helps limit branching).
         c_puct:              Exploration constant for the UCB formula.
 
     Returns:
-        best_action_idx (int): index into 'vocab' of the best action from the root.
+        batch_action_idx: shape [batch_size] index into 'vocab' of the best action from the root.
+        batch_action_visits: shape [batch_size, action_size] number of visits for the chosen action.
     """
-    # 1) Create the root node
-    root_node = MCTSNode(
-        alphabet_state=root_alphabet_state,
-        guess_state=root_guess_state,
-        guess_num=guess_num,
-        target_word=target_word,
-        parent=None,
-        prior=1.0,
-        reward=0.0
-    )
-    # Expand it once to get initial children
-    root_node.expand(actor_critic_net, vocab, alpha, temperature, top_k=top_k)
+    batch_size = root_alphabet_states.size(0)
+    action_size = len(vocab)
 
-    # 2) Run repeated simulations
-    for _ in range(num_simulations):
-        node = root_node
-        path = [node]
+    batch_action_idx = []
+    batch_action_visits = torch.zeros(batch_size, action_size)
 
-        # --- SELECTION ---
-        # Descend while node has children and is not terminal
-        while node.children and not node.is_terminal():
-            node = select_child_via_ucb(node, c_puct=c_puct)
-            path.append(node)
+    for i in range(batch_size):
+        # 1) Create the root node
+        root_node = MCTSNode(
+            alphabet_state=root_alphabet_states[i],
+            guess_state=root_guess_states[i],
+            guess_num=guess_num,
+            guess_mask=guess_mask_batch[i],
+            target_word=target_words[i],
+            parent=None,
+            prior=1.0,
+            reward=0.0,
+        )
+        # Expand it once to get initial children
+        root_node.expand(actor_critic_net, vocab, alpha, temperature, top_k=top_k)
 
-        # --- EXPANSION ---
-        if not node.is_terminal():
-            node.expand(actor_critic_net, vocab, alpha, temperature, top_k=top_k)
+        # 2) Run repeated simulations
+        for _ in range(num_simulations):
+            node = root_node
+            path = [node]
 
-        # --- ROLLOUT / VALUE ESTIMATE ---
-        value_est = rollout_or_value_estimate(node, actor_critic_net)
+            # --- SELECTION ---
+            # Descend while node has children and is not terminal
+            while node.children and not node.is_terminal():
+                node = select_child_via_ucb(node, c_puct=c_puct)
+                path.append(node)
 
-        # --- BACKPROP ---
-        backpropagate(path, value_est)
+            # --- EXPANSION ---
+            if not node.is_terminal():
+                node.expand(actor_critic_net, vocab, alpha, temperature, top_k=top_k)
 
-    # 3) Choose the action with the highest visit count from root
-    best_child, best_action_idx, best_visits = None, None, -1
-    for action_idx, child in root_node.children.items():
-        if child.visit_count > best_visits:
-            best_visits = child.visit_count
-            best_child = child
-            best_action_idx = action_idx
+            # --- ROLLOUT / VALUE ESTIMATE ---
+            value_est = rollout_or_value_estimate(node, actor_critic_net)
 
-    return best_action_idx
+            # --- BACKPROP ---
+            backpropagate(path, value_est)
+
+        # 3) Choose the action with the highest visit count from root
+        action_visits = torch.zeros(action_size)
+        sum_visits = 0
+        best_child, best_action_idx, best_visits = None, None, -1
+        for action_idx, child in root_node.children.items():
+            action_visits[action_idx] = child.visit_count
+            sum_visits += child.visit_count
+            if child.visit_count > best_visits:
+                best_visits = child.visit_count
+                best_child = child
+                best_action_idx = action_idx
+        batch_action_idx[i] = best_action_idx
+        batch_action_visits[i] = action_visits
+
+    return batch_action_idx, batch_action_visits

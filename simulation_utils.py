@@ -1,11 +1,12 @@
 import torch
 import torch.nn.functional as F
 import string
-# from mcts import mcts_search
-
+from mcts import mcts_search
 
 
 letter_to_idx = {ch: i for i, ch in enumerate(string.ascii_lowercase)}
+
+
 def words_to_tensor(words):
     """
     Convert a list of words (lowercase, length=5)
@@ -17,12 +18,13 @@ def words_to_tensor(words):
     words_tensor = torch.tensor(mapped, dtype=torch.long)
     return words_tensor
 
+
 ############################################
 # STATE UTILS
 ############################################
 def update_alphabet_states(given_alphabet_states, guess_words, target_words):
     """
-    Update the alphabet state in tensor operations. Specifically, 
+    Update the alphabet state in tensor operations. Specifically,
 
     Inputs:
     - given_alphabet_state: shape [batch_size, 26, 11]
@@ -51,11 +53,17 @@ def update_alphabet_states(given_alphabet_states, guess_words, target_words):
     batch_size = given_alphabet_states.size(0)
 
     # Tensorize guess/target information
-    guess_tensor = words_to_tensor(guess_words).unsqueeze(1).repeat(1, 26, 1)    # shape [batch_size, 26, 5]
-    target_tensor = words_to_tensor(target_words).unsqueeze(1).repeat(1, 26, 1)  # shape [batch_size, 26, 5]
-    alphabet_tensor = torch.arange(0, 26).view(1, -1, 1).repeat(batch_size, 1, 5)  # shape [batch_size, 26, 5]
-    guess_loc = (guess_tensor == alphabet_tensor)  # shape [batch_size, 26, 5]
-    target_loc = (target_tensor == alphabet_tensor)  # shape [batch_size, 26, 5]
+    guess_tensor = (
+        words_to_tensor(guess_words).unsqueeze(1).repeat(1, 26, 1)
+    )  # shape [batch_size, 26, 5]
+    target_tensor = (
+        words_to_tensor(target_words).unsqueeze(1).repeat(1, 26, 1)
+    )  # shape [batch_size, 26, 5]
+    alphabet_tensor = (
+        torch.arange(0, 26).view(1, -1, 1).repeat(batch_size, 1, 5)
+    )  # shape [batch_size, 26, 5]
+    guess_loc = guess_tensor == alphabet_tensor  # shape [batch_size, 26, 5]
+    target_loc = target_tensor == alphabet_tensor  # shape [batch_size, 26, 5]
 
     # Calculate masks
     ## Counting occurrences
@@ -63,14 +71,18 @@ def update_alphabet_states(given_alphabet_states, guess_words, target_words):
     exist = target_loc.sum(dim=-1, keepdim=True)  # shape [batch_size, 26, 1]
     letter_count = torch.min(guessed, exist)  # shape [batch_size, 26, 1]
     ## Checking matches
-    green_mask = (guess_loc & target_loc)  # shape [batch_size, 26, 5]
+    green_mask = guess_loc & target_loc  # shape [batch_size, 26, 5]
     ## Checking non-matches
-    not_exist = ((guessed > 0) & (exist == 0)).repeat(1, 1, 5)  # shape [batch_size, 26, 5]
-    found_not = (guess_loc & ~target_loc)  # shape [batch_size, 26, 5]
-    grey_mask = not_exist | found_not # shape [batch_size, 26]
+    not_exist = ((guessed > 0) & (exist == 0)).repeat(
+        1, 1, 5
+    )  # shape [batch_size, 26, 5]
+    found_not = guess_loc & ~target_loc  # shape [batch_size, 26, 5]
+    grey_mask = not_exist | found_not  # shape [batch_size, 26]
 
     # Combine and update
-    guess_alphabet_states = torch.cat([letter_count, green_mask, grey_mask], dim=-1).float()
+    guess_alphabet_states = torch.cat(
+        [letter_count, green_mask, grey_mask], dim=-1
+    ).float()
     new_alphabet_states = torch.max(guess_alphabet_states, given_alphabet_states)
 
     return new_alphabet_states
@@ -79,24 +91,34 @@ def update_alphabet_states(given_alphabet_states, guess_words, target_words):
 def calculate_alphabet_scores(alphabet_states):
     """
     Returns a weighted sum for letter scores, summed over the whole alphabet.
-    - alphabet_states: representing the states of all letters [batch_size, 26, 11] 
+    - alphabet_states: representing the states of all letters [batch_size, 26, 11]
     - score: shape [batch_size]
     """
     # Define value weights
-    weights = torch.cat([
-        torch.tensor([0.5]),               # Number of known occurences
-        torch.tensor([1.0]).repeat(5),     # Matching letter and placement (greens)
-        torch.tensor([0.02]).repeat(5)      # Unmatching letter and placement (yellows / greys)
-    ]).view(1, 1, -1)  # shape [1, 1, 11]
+    weights = torch.cat(
+        [
+            torch.tensor([0.5]),  # Number of known occurences
+            torch.tensor([1.0]).repeat(5),  # Matching letter and placement (greens)
+            torch.tensor([0.02]).repeat(
+                5
+            ),  # Unmatching letter and placement (yellows / greys)
+        ]
+    ).view(
+        1, 1, -1
+    )  # shape [1, 1, 11]
 
     # Calculate score
     weighted_state = alphabet_states * weights  # [batch_size, 26, 11]
-    scores = weighted_state.sum(dim=-1).sum(dim=-1)  # sum over letters (dim=1) and columns (dim=2)  # shape [batch_size]
-    
+    scores = weighted_state.sum(dim=-1).sum(
+        dim=-1
+    )  # sum over letters (dim=1) and columns (dim=2)  # shape [batch_size]
+
     return scores
 
 
-def calculate_rewards(new_alphabet_states, given_alphabet_states, guess_words, target_words):
+def calculate_rewards(
+    new_alphabet_states, given_alphabet_states, guess_words, target_words
+):
     """
     Calculate the reward given two alphabet states.
 
@@ -110,13 +132,20 @@ def calculate_rewards(new_alphabet_states, given_alphabet_states, guess_words, t
       rewards: [batch_size] float tensor
     """
     # Heuristic information reward with baseline penalty
-    rewards = calculate_alphabet_scores(new_alphabet_states) - calculate_alphabet_scores(given_alphabet_states)  # shape [batch_size]
+    rewards = calculate_alphabet_scores(
+        new_alphabet_states
+    ) - calculate_alphabet_scores(
+        given_alphabet_states
+    )  # shape [batch_size]
 
     # Bonus reward for correct guess
-    correct_mask = torch.tensor([
-        1.0 if guess_words[i] == target_words[i] else 0.0
-        for i in range(len(guess_words))
-    ], dtype=torch.float32)
+    correct_mask = torch.tensor(
+        [
+            1.0 if guess_words[i] == target_words[i] else 0.0
+            for i in range(len(guess_words))
+        ],
+        dtype=torch.float32,
+    )
     rewards += 5.0 * correct_mask  # shape [batch_size]
 
     return rewards
@@ -125,80 +154,142 @@ def calculate_rewards(new_alphabet_states, given_alphabet_states, guess_words, t
 ############################################
 # SIMULATION UTILS
 ############################################
-def make_probs(logits, alpha, temperature):
+def make_probs(logits, alpha, temperature, guess_mask_batch=None):
     """
     Returns the final probabilities after mixing with uniform distribution and temperature scaling.
+    - logits: [batch_size, action_size]
+    - guess_mask_batch: [batch_size, max_guesses, action_size] (mask of already guessed words)
+    - alpha: float (uniform mixing parameter)
+    - temperature: float (temperature for softmax)
     """
     # Softmax with temperature
     scaled_logits = logits / temperature
-    probs = F.softmax(scaled_logits, dim=-1)  
+    probs = F.softmax(scaled_logits, dim=-1)
 
     # Uniform distribution for alpha-mixing
     uniform_probs = torch.ones_like(probs) / probs.size(-1)
-    final_probs = alpha * uniform_probs + (1 - alpha) * probs
+    probs = alpha * uniform_probs + (1 - alpha) * probs
 
-    return final_probs
+    # Mask out already guessed words
+    if guess_mask_batch is not None:
+        guessed = torch.any(guess_mask_batch, dim=1)  # shape: [batch_size, action_size]
+        probs = probs * ~guessed  # Mask out already guessed words
+        probs = probs / probs.sum(dim=-1, keepdim=True)  # Renormalize
+
+    return probs
 
 
-def select_actions(actor_critic_net, states, vocab, guess_mask_batch, alpha, temperature, argmax=False):
+def select_actions(
+    actor_critic_net,
+    alphabet_states,
+    guess_states,
+    guess_num,
+    guess_mask_batch,
+    target_words,
+    vocab,
+    alpha,
+    temperature,
+    argmax=False,
+):
     """
     For each environment in the batch, compute probabilities, and select a word.
-    - states: [batch_size, state_size]
-    - guess_mask_batch: [batch_size, max_guesses, action_size]
+    - alphabet_states: [batch_size, 26, 11]
+    - guess_states: [batch_size, max_guesses]
+    - guess_num: [batch_size] (current guess number)
+    - guess_mask_batch: [batch_size, max_guesses, action_size] (mask of already guessed words)
+    - alpha, temperature: float (exploration parameters)
     """
     # Forward pass to get logits and value
-    logits, values = actor_critic_net(states)  # shape: logits=[batch_size, action_size], value=[batch_size,1]
-    probs = make_probs(logits, alpha, temperature)  # shape: [batch_size, action_size]
-    guessed = torch.any(guess_mask_batch, dim=1)  # shape: [batch_size, action_size]
-    probs = probs * ~guessed  # Mask out already guessed words
+    states = torch.cat(
+        [alphabet_states.view(-1, 26 * 11), guess_states], dim=-1
+    )  # shape: [batch_size, 26*11 + max_guesses]
+    logits, values = actor_critic_net(
+        states
+    )  # shape: logits=[batch_size, action_size], values=[batch_size,1]
+    probs = make_probs(
+        logits, alpha, temperature, guess_mask_batch
+    )  # shape: [batch_size, action_size]
 
-    # Sample an action
+    # Sample actions
     if not argmax:
         guess_idx = torch.multinomial(probs, 1).squeeze()  # shape: [batch_size]
     else:
         guess_idx = torch.argmax(probs, dim=1).squeeze()  # shape: [batch_size]
     guess_words = [vocab[idx] for idx in guess_idx]  # shape: [batch_size]
-    guess_idx = F.one_hot(guess_idx, num_classes=probs.shape[-1]).float()  # shape: [batch_size, action_size]
+    guess_idx = F.one_hot(
+        guess_idx, num_classes=probs.shape[-1]
+    ).float()  # shape: [batch_size, action_size]
 
     return probs, values, guess_idx, guess_words
 
 
-# def select_actions_with_mcts(
-#     actor_critic_net,
-#     batch_alphabet_states,
-#     batch_guess_states,
-#     batch_guess_nums,
-#     batch_target_words,
-#     vocab,
-#     alpha,
-#     temperature,
-#     num_simulations=30,
-#     top_k=50,
-#     c_puct=1.0
-# ):
-#     # we do a loop over batch_size, calling MCTS for each environment,
-#     # then return the chosen guess index for each environment
-#     batch_size = len(batch_alphabet_states)
-#     guess_indices = []
+def select_actions_mcts(
+    actor_critic_net,
+    alphabet_states,
+    guess_states,
+    guess_num,
+    guess_mask_batch,
+    target_words,
+    vocab,
+    alpha,
+    temperature,
+    argmax=False,
+    num_simulations=30,
+    top_k=50,
+    c_puct=1.0,
+):
+    """
+    Select actions using MCTS for a batch of environments.
+    - alphabet_states: [batch_size, 26, 11]
+    - guess_states: [batch_size, max_guesses]
+    - guess_num: [batch_size] (current guess number)
+    - guess_mask_batch: [batch_size, max_guesses, action_size] (mask of already guessed words)
+    - target_words: list of length batch_size (each a 5-char string)
+    - vocab: list of possible guess words
+    - alpha, temperature: float (exploration parameters)
+    - num_simulations: int (number of MCTS simulations)
+    - top_k: int (number of top children to expand)
+    - c_puct: float (exploration constant)
+    """
+    # Forward pass to get logits and value
+    states = torch.cat(
+        [alphabet_states.view(-1, 26 * 11), guess_states], dim=-1
+    )  # shape: [batch_size, 26*11 + max_guesses]
+    logits, values = actor_critic_net(
+        states
+    )  # shape: logits=[batch_size, action_size], values=[batch_size,1]
 
-#     for i in range(batch_size):
-#         best_idx = mcts_search(
-#             root_alphabet_state=batch_alphabet_states[i],
-#             root_guess_state=batch_guess_states[i],
-#             guess_num=batch_guess_nums[i],
-#             target_word=batch_target_words[i],
-#             actor_critic_net=actor_critic_net,
-#             vocab=vocab,
-#             alpha=alpha,
-#             temperature=temperature,
-#             num_simulations=num_simulations,
-#             top_k=top_k,
-#             c_puct=c_puct
-#         )
-#         guess_indices.append(best_idx)
+    # Get the actions from MCTS
+    guess_idx, guess_visits = mcts_search(
+        root_alphabet_states=alphabet_states,
+        root_guess_states=guess_states,
+        guess_num=guess_num,
+        guess_mask_batch=guess_mask_batch,
+        target_words=target_words,
+        actor_critic_net=actor_critic_net,
+        vocab=vocab,
+        alpha=alpha,
+        temperature=temperature,
+        argmax=argmax,
+        num_simulations=num_simulations,
+        top_k=top_k,
+        c_puct=c_puct,
+    )  # shape: [batch_size], [batch_size, action_size]
+    probs = make_probs(
+        torch.log(guess_visits + 1e-8), guess_mask_batch, alpha, temperature
+    )  # shape: [batch_size, action_size]
 
-#     guess_words = [vocab[idx] for idx in guess_indices]
-#     return guess_indices, guess_words
+    # Sample actions
+    if not argmax:
+        guess_idx = torch.multinomial(probs, 1).squeeze()  # shape: [batch_size]
+    else:
+        guess_idx = torch.argmax(probs, dim=1).squeeze()  # shape: [batch_size]
+    guess_words = [vocab[idx] for idx in guess_idx]  # shape: [batch_size]
+    guess_idx = F.one_hot(
+        guess_idx, num_classes=probs.shape[-1]
+    ).float()  # shape: [batch_size, action_size]
+
+    return probs, values, guess_idx, guess_words
 
 
 def wordle_step(alphabet_states, guess_states, guess_words, target_words):
@@ -217,11 +308,17 @@ def wordle_step(alphabet_states, guess_states, guess_words, target_words):
     """
     batch_size = alphabet_states.size(0)
 
-    new_alphabet_states = update_alphabet_states(alphabet_states, guess_words, target_words)
+    new_alphabet_states = update_alphabet_states(
+        alphabet_states, guess_words, target_words
+    )
     new_guess_states = guess_states.roll(shifts=1, dims=1)
 
-    rewards = calculate_rewards(new_alphabet_states, alphabet_states, guess_words, target_words)
-    correct = torch.tensor([guess_words[i] == target_words[i] for i in range(batch_size)], dtype=torch.bool)
+    rewards = calculate_rewards(
+        new_alphabet_states, alphabet_states, guess_words, target_words
+    )
+    correct = torch.tensor(
+        [guess_words[i] == target_words[i] for i in range(batch_size)], dtype=torch.bool
+    )
 
     return new_alphabet_states, new_guess_states, rewards, correct
 
@@ -233,7 +330,7 @@ def collect_episodes(
     alpha,
     temperature,
     max_guesses=6,
-    argmax=False
+    argmax=False,
 ):
     """
     Collect a single Wordle episode with a *fixed length* rollout of 6 guesses.
@@ -250,11 +347,13 @@ def collect_episodes(
     action_size = len(vocab)
 
     # 1.1) Initialize Tensors
-    states_batch = torch.zeros((batch_size, max_guesses+1, 26*11+max_guesses), dtype=torch.float32)
+    alphabet_states_batch = torch.zeros((batch_size, max_guesses + 1, 26, 11), dtype=torch.float32)
+    guess_states_batch = torch.zeros((batch_size, max_guesses + 1, max_guesses), dtype=torch.float32)
     probs_batch = torch.zeros((batch_size, max_guesses, action_size), dtype=torch.float32)
-    rewards_batch  = torch.zeros((batch_size, max_guesses), dtype=torch.float32)
+    rewards_batch = torch.zeros((batch_size, max_guesses), dtype=torch.float32)
     guess_mask_batch = torch.zeros((batch_size, max_guesses, action_size), dtype=torch.bool)
-    active_mask_batch = torch.ones((batch_size, max_guesses+1), dtype=torch.bool)
+    correct_mask_batch = torch.zeros((batch_size, max_guesses), dtype=torch.bool)
+    active_mask_batch = torch.ones((batch_size, max_guesses + 1), dtype=torch.bool)
     guess_words_batch = []
 
     # 1.2) Initialize environment state
@@ -264,62 +363,165 @@ def collect_episodes(
 
     # 2) Roll out up to max_guesses
     active = torch.ones(batch_size, dtype=torch.bool)
-    for t in range(max_guesses):
+    for guess_num in range(max_guesses):
         # Construct the state
-        states = torch.cat([alphabet_states.view(batch_size, -1), guess_states], dim=-1)  # shape [batch_size, 26*11 + max_guesses]
-        states_batch[:, t, :] = states
+        alphabet_states_batch[:, guess_num] = alphabet_states
+        guess_states_batch[:, guess_num] = guess_states
 
         # Select action
         # probs, values, guess_idx, guess_words = select_actions(
-        #     actor_critic_net, states, vocab, guess_mask_batch, alpha, temperature, argmax
+        #     actor_critic_net, alphabet_states, guess_states, guess_num, guess_mask_batch, target_words, vocab, alpha, temperature, argmax
         # )
 
+        # Select action with MCTS
+        probs, values, guess_idx, guess_words = select_actions_mcts(
+            actor_critic_net,
+            alphabet_states,
+            guess_states,
+            guess_num,
+            guess_mask_batch,
+            target_words,
+            vocab,
+            alpha,
+            temperature,
+            argmax,
+        )
+
         # Step environment
-        alphabet_states, guess_states, rewards, correct = wordle_step(alphabet_states, guess_states, guess_words, target_words)
+        alphabet_states, guess_states, rewards, correct = wordle_step(
+            alphabet_states, guess_states, guess_words, target_words
+        )
         active = active & (~correct)
 
         # Update
-        probs_batch[:, t, :] = probs
-        rewards_batch[:, t] = rewards
-        guess_mask_batch[:, t] = guess_idx
+        probs_batch[:, guess_num, :] = probs
+        rewards_batch[:, guess_num] = rewards
+        guess_mask_batch[:, guess_num] = guess_idx
         guess_words_batch.append(guess_words)
-        active_mask_batch[:, t+1] = active
+        correct_mask_batch[:, guess_num] = correct
+        active_mask_batch[:, guess_num + 1] = active
 
     active_mask_batch[:, -1] = 0  # Last step is not active
 
-    return states_batch, probs_batch, rewards_batch, guess_mask_batch, guess_words_batch, active_mask_batch
+    return (
+        alphabet_states_batch,
+        guess_states_batch,
+        probs_batch,
+        rewards_batch,
+        guess_mask_batch,
+        guess_words_batch,
+        correct_mask_batch,
+        active_mask_batch,
+    )
 
 
-def process_episodes(actor_critic_net, states_batch, rewards_batch, active_mask_batch, alpha, temperature, gamma, lam):
+def process_episodes(
+    actor_critic_net,
+    states_batch,
+    rewards_batch,
+    guess_mask_batch,
+    correct_mask_batch,
+    active_mask_batch,
+    alpha,
+    temperature,
+    gamma,
+    lam,
+):
     """
     Process the collected episodes to compute advantages and final probabilities.
 
     Takes:
       states_batch:  [batch_size, max_guesses+1, state_size]
       rewards_batch: [batch_size, max_guesses]
+      guess_mask_batch: [batch_size, max_guesses, action_size]
+      correct_mask_batch: [batch_size, max_guesses]
       active_mask_batch: [batch_size, max_guesses+1]
 
     Returns:
       advantages_batch: [batch_size, max_guesses]
-      probs_batch: [batch_size, max_guesses, action_size
+      probs_batch: [batch_size, max_guesses, action_size]
     """
     batch_size = states_batch.size(0)  # batch size
-    max_guesses = states_batch.size(1)-1  # max guesses (6 for Wordle)
+    max_guesses = states_batch.size(1) - 1  # max guesses (6 for Wordle)
 
-    naive_logits, naive_values_batch = actor_critic_net(states_batch)  # shape: logits=[batch_size, max_guesses+1, action_size], value=[batch_size, max_guesses+1, 1]
-    logits_batch = naive_logits[:, :-1, :]  # shape: [batch_size, max_guesses, action_size]
-    values_batch = (naive_values_batch.squeeze() * active_mask_batch.float())  # shape: [batch_size, max_guesses+1]
-    rewards_batch = (rewards_batch * active_mask_batch[:, :-1].float()) # shape: [batch_size, max_guesses]
+    naive_logits, naive_values_batch = actor_critic_net(
+        states_batch
+    )  # shape: logits=[batch_size, max_guesses+1, action_size], value=[batch_size, max_guesses+1, 1]
+    logits_batch = naive_logits[
+        :, :-1, :
+    ]  # shape: [batch_size, max_guesses, action_size]
+    values_batch = (
+        naive_values_batch.squeeze() * active_mask_batch.float()
+    )  # shape: [batch_size, max_guesses+1]
+    rewards_batch = (
+        rewards_batch * active_mask_batch[:, :-1].float()
+    )  # shape: [batch_size, max_guesses]
 
     # Compute advantages for batch with uniform episode size
     advantages_batch = torch.zeros((batch_size, max_guesses), dtype=torch.float32)
     gae = torch.zeros(batch_size, dtype=torch.float32)
     for t in reversed(range(max_guesses)):
-        delta = rewards_batch[:, t] + gamma * values_batch[:, t+1] - values_batch[:, t]
+        delta = (
+            rewards_batch[:, t] + gamma * values_batch[:, t + 1] - values_batch[:, t]
+        )
         gae = delta + gamma * lam * gae
         advantages_batch[:, t] = gae
 
     # Calculate the final probs
-    probs_batch = make_probs(logits_batch, alpha, temperature)
+    probs_batch = make_probs(logits_batch, alpha, temperature, guess_mask_batch)
+
+    return advantages_batch, probs_batch
+
+
+def process_episodes_mcts(
+    actor_critic_net,
+    states_batch,
+    rewards_batch,
+    guess_mask_batch,
+    correct_mask_batch,
+    active_mask_batch,
+    alpha,
+    temperature,
+    gamma,
+    lam,
+):
+    """
+    Process the collected episodes to compute advantages and final probabilities.
+
+    Takes:
+      states_batch:  [batch_size, max_guesses+1, state_size]
+      rewards_batch: [batch_size, max_guesses]
+      guess_mask_batch: [batch_size, max_guesses, action_size]
+      correct_mask_batch: [batch_size, max_guesses]
+      active_mask_batch: [batch_size, max_guesses+1]
+
+    Returns:
+      advantages_batch: [batch_size, max_guesses]
+      probs_batch: [batch_size, max_guesses, action_size]
+    """
+    batch_size = states_batch.size(0)  # batch size
+    max_guesses = states_batch.size(1) - 1  # max guesses (6 for Wordle)
+
+    naive_logits, naive_values_batch = actor_critic_net(
+        states_batch
+    )  # shape: logits=[batch_size, max_guesses+1, action_size], value=[batch_size, max_guesses+1, 1]
+    logits_batch = naive_logits[
+        :, :-1, :
+    ]  # shape: [batch_size, max_guesses, action_size]
+    values_batch = (
+        naive_values_batch.squeeze() * active_mask_batch.float()
+    )  # shape: [batch_size, max_guesses+1]
+    rewards_batch = (
+        rewards_batch * active_mask_batch[:, :-1].float()
+    )  # shape: [batch_size, max_guesses]
+
+    # Compute advantages for batch with uniform episode size
+    advantages_batch = (
+        correct_mask_batch.any(dim=1).repeat(1, max_guesses).float()
+        - values_batch[:, :, -1]
+    )  # shape: [batch_size, max_guesses]
+
+    # Calculate the final probs
+    probs_batch = make_probs(logits_batch, alpha, temperature, guess_mask_batch)
 
     return advantages_batch, probs_batch
