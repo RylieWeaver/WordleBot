@@ -6,7 +6,7 @@ from data_utils import get_vocab
 def main():
     # Instantiate hyperparameters
     epochs = 50000
-    lr = 1e-3
+    lr = 1e-4
     batch_size = 100
     vocab_size = 100
 
