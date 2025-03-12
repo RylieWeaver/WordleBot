@@ -8,7 +8,7 @@ def main():
     epochs = 50000
     lr = 1e-4
     batch_size = 100
-    vocab_size = 100
+    vocab_size = 200
 
     # Instantiate data
     state_size = 292  # 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
