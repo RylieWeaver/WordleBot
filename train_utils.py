@@ -2,6 +2,58 @@ import torch
 import torch.nn.functional as F
 
 
+def calculate_loss_mcts(
+    old_policy_probs,
+    policy_probs,
+    action_probs,
+    advantages,
+    actor_coef,
+    critic_coef,
+    entropy_coef,
+    kl_coef,
+    guess_mask,
+    active_mask,
+    norm=True,
+):
+    """
+    Calculate the total loss for a batch given:
+    (1) Advantages, log_probs, critic_losses, entropies
+    (2) Masks for guess idx and when active.
+    """
+
+    # Mask
+    advantages = advantages[active_mask[:, :-1]]
+    old_policy_probs = old_policy_probs[active_mask[:, :-1]]
+    # Mask the probs by activity for KL and entropy, then by activate guess for actor loss
+    policy_probs = policy_probs[active_mask[:, :-1]]
+    active_guess_mask = guess_mask[active_mask[:, :-1]]
+    action_probs = action_probs[active_guess_mask]
+
+    # Calculate stats
+    old_policy_log_probs = torch.log(old_policy_probs + 1e-8)
+    policy_log_probs = torch.log(policy_probs + 1e-8)
+    action_log_probs = torch.log(action_probs + 1e-8)
+    entropies = -torch.sum(policy_probs * policy_log_probs, dim=-1)
+    critic_losses = advantages.pow(2)
+
+    # Normalize advantages
+    if norm:
+        mean_adv = advantages.mean()
+        std_adv = advantages.std() + 1e-8
+        advantages = (advantages - mean_adv) / std_adv
+
+    # Compute losses
+    # actor_loss = -(advantages * chosen_log_probs).mean()
+    actor_loss = -torch.sum(action_probs * policy_log_probs, dim=-1).mean()  # actor loss is cross-entropy between action probs and policy probs
+    critic_loss = critic_losses.mean()
+    entropy_loss = -entropies.mean()
+    kl_loss = F.kl_div(old_policy_log_probs, policy_log_probs, reduction="batchmean", log_target=True)
+
+    # Combine losses with coefficients
+    total_loss = actor_coef * actor_loss + critic_coef * critic_loss + entropy_coef * entropy_loss + kl_coef * kl_loss
+    return total_loss, actor_loss, critic_loss, entropy_loss, kl_loss
+
+
 def calculate_loss(
     advantages,
     old_probs,
@@ -48,12 +100,7 @@ def calculate_loss(
     kl_loss = F.kl_div(old_log_probs, log_probs, reduction="batchmean", log_target=True)
 
     # Combine losses with coefficients
-    total_loss = (
-        actor_coef * actor_loss
-        + critic_coef * critic_loss
-        + entropy_coef * entropy_loss
-        + kl_coef * kl_loss
-    )
+    total_loss = actor_coef * actor_loss + critic_coef * critic_loss + entropy_coef * entropy_loss + kl_coef * kl_loss
     return total_loss, actor_loss, critic_loss, entropy_loss, kl_loss
 
 
@@ -117,22 +164,15 @@ def evolve_learning_params(
             for pg in optimizer.param_groups:
                 old_lr = pg["lr"]
                 if old_lr < init_lr:
-                    print(
-                        f"  -> LR was {old_lr:.6f}=min, resetting to init_lr={init_lr:.6f}"
-                    )
+                    print(f"  -> LR was {old_lr:.6f}=min, resetting to init_lr={init_lr:.6f}")
                 pg["lr"] = init_lr
 
             old_alpha, old_temp = alpha, temperature
-            alpha, temperature, changed = evolve_policy_params(
-                alpha, temperature, min_alpha, min_temperature
-            )
+            alpha, temperature, changed = evolve_policy_params(alpha, temperature, min_alpha, min_temperature)
             if changed:
                 best_test_actor_loss = float("inf")
                 best_test_critic_loss = float("inf")
-                print(
-                    f"  -> Evolved alpha: {old_alpha:.2f} -> {alpha:.2f}, "
-                    f"temp: {old_temp:.2f} -> {temperature:.2f}.\n"
-                )
+                print(f"  -> Evolved alpha: {old_alpha:.2f} -> {alpha:.2f}, " f"temp: {old_temp:.2f} -> {temperature:.2f}.\n")
         # else:
         #     # Already minimal exploration + min_lr => do nothing
         #     print("  -> All LR at min and alpha,temp minimal => no changes.\n")

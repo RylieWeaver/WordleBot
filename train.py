@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from simulation_utils import collect_episodes, process_episodes, process_episodes_mcts
-from train_utils import calculate_loss, evolve_learning_params
+from train_utils import calculate_loss, calculate_loss_mcts, evolve_learning_params
 from debug_utils import examine_gradients, examine_parameters
 
 
@@ -43,7 +43,7 @@ def train(
     min_lr = lr / 1e1
     lr_decay_factor = 0.099
     patience = 10
-    alpha = 1.0
+    alpha = 0.99
     min_alpha = 0.03
     temperature = 3.0
     min_temperature = 0.01
@@ -60,9 +60,11 @@ def train(
         for batch_idx, target_words in enumerate(train_loader):
             # -------- Run episodes using the old policy --------
             (
-                states_batch,
-                old_probs_batch,
+                alphabet_states_batch,
+                guess_states_batch,
                 rewards_batch,
+                old_policy_probs_batch,
+                action_probs_batch,
                 guess_mask_batch,
                 guess_words_batch,
                 correct_mask_batch,
@@ -78,10 +80,12 @@ def train(
             )
 
             # ---------------- Process Episodes ----------------
-            advantages_batch, probs_batch = process_episodes_mcts(
+            advantages_batch, policy_probs_batch = process_episodes_mcts(
                 actor_critic_net,
-                states_batch,
+                alphabet_states_batch,
+                guess_states_batch,
                 rewards_batch,
+                guess_mask_batch,
                 correct_mask_batch,
                 active_mask_batch,
                 alpha,
@@ -91,10 +95,11 @@ def train(
             )
 
             # -------------- Compute Loss --------------
-            loss, actor_loss, critic_loss, entropy_loss, kl_loss = calculate_loss(
+            loss, actor_loss, critic_loss, entropy_loss, kl_loss = calculate_loss_mcts(
+                old_policy_probs_batch,
+                policy_probs_batch,
+                action_probs_batch,
                 advantages_batch,
-                old_probs_batch,
-                probs_batch,
                 actor_coef,
                 critic_coef,
                 entropy_coef,
@@ -134,18 +139,11 @@ def train(
         )
 
         # ---------------- Print Training Progress ----------------
-        print(
-            f"Epoch {epoch}/{epochs} | "
-            f"Loss: {test_loss:.4f} | "
-            f"Acc: {test_accuracy:.2%} | "
-            f"alpha={alpha:.2f}, temp={temperature:.2f}"
-        )
+        print(f"Epoch {epoch}/{epochs} | " f"Loss: {test_loss:.4f} | " f"Acc: {test_accuracy:.2%} | " f"alpha={alpha:.2f}, temp={temperature:.2f}")
 
         # ---------------- Evolve Learning ----------------
         # Check improvement on test loss
-        if (test_actor_loss < best_test_actor_loss) or (
-            test_critic_loss < best_test_critic_loss
-        ):
+        if (test_actor_loss < best_test_actor_loss) or (test_critic_loss < best_test_critic_loss):
             no_improve_count = 0
         else:
             no_improve_count += 1
@@ -154,19 +152,17 @@ def train(
 
         # If no improvement on test loss for 'patience' epochs => decay LR / evolve policy params alpha, temperature
         if no_improve_count >= patience:
-            alpha, temperature, best_test_actor_loss, best_test_critic_loss = (
-                evolve_learning_params(
-                    optimizer,
-                    alpha,
-                    min_alpha,
-                    temperature,
-                    min_temperature,
-                    lr,
-                    min_lr,
-                    lr_decay_factor,
-                    best_test_actor_loss,
-                    best_test_critic_loss,
-                )
+            alpha, temperature, best_test_actor_loss, best_test_critic_loss = evolve_learning_params(
+                optimizer,
+                alpha,
+                min_alpha,
+                temperature,
+                min_temperature,
+                lr,
+                min_lr,
+                lr_decay_factor,
+                best_test_actor_loss,
+                best_test_critic_loss,
             )
             no_improve_count = 0
 
@@ -258,9 +254,7 @@ def test(
             test_critic_loss += batch_critic_loss.item()
             test_entropy_loss += batch_entropy_loss.item()
             test_kl_loss += batch_kl_loss.item()
-            test_correct += (
-                ((active_mask_batch[:, :-1] == 0).any(dim=1)).sum().item()
-            )  # the last column should be zeros anyways
+            test_correct += ((active_mask_batch[:, :-1] == 0).any(dim=1)).sum().item()  # the last column should be zeros anyways
             test_samples += len(target_words)
 
     # Calculate metrics

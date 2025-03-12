@@ -14,14 +14,10 @@ class ActorCriticNet(nn.Module):
         self.norm = nn.LayerNorm(hidden_dim)
 
         # Embedding layers
-        self.embed = nn.Sequential(
-            nn.Linear(state_size, hidden_dim), self.act, self.norm
-        )  # First layer embeds the input to hidden_dim
+        self.embed = nn.Sequential(nn.Linear(state_size, hidden_dim), self.act, self.norm)  # First layer embeds the input to hidden_dim
 
         for _ in range(layers - 1):
-            self.network.append(
-                nn.Sequential(nn.Linear(hidden_dim, hidden_dim), self.act, self.norm)
-            )
+            self.network.append(nn.Sequential(nn.Linear(hidden_dim, hidden_dim), self.act, self.norm))
 
         # Output heads
         self.logits = nn.Linear(hidden_dim, vocab_size)
@@ -35,9 +31,7 @@ class ActorCriticNet(nn.Module):
           value:  [batch_dim, 1]
         """
         # Input embedding
-        sc = self.embed(
-            x
-        )  # Initial embedding acts as the entire network's residual connection
+        sc = self.embed(x)  # Initial embedding acts as the entire network's residual connection
 
         # Layers
         x = sc  # Start with the embedding

@@ -26,30 +26,20 @@ def update_letter_state(
     if guess_green_idx and state_green_idx:
         ## If they are the same greens, we can combine the yellow information
         if guess_green_idx == state_green_idx:
-            new_letter_state[7:12] = guess_letter_state[7:12] = given_letter_state[
-                7:12
-            ]  # Equal green information
-            new_letter_state[2:7] = torch.max(
-                guess_letter_state[2:7], given_letter_state[2:7]
-            )  # Combined the yellow info
+            new_letter_state[7:12] = guess_letter_state[7:12] = given_letter_state[7:12]  # Equal green information
+            new_letter_state[2:7] = torch.max(guess_letter_state[2:7], given_letter_state[2:7])  # Combined the yellow info
             new_letter_state[1] = 0  # Explicitly say it is not grey
             new_letter_state[0] = 0  # Explicitly say it is not unknown
         if guess_green_idx != state_green_idx:
-            new_letter_state[7:12] = torch.max(
-                guess_letter_state[7:12], given_letter_state[7:12]
-            )  # Combined green info
-            new_letter_state[2:7] = torch.zeros(
-                5, dtype=torch.float32
-            )  # No yellow information
+            new_letter_state[7:12] = torch.max(guess_letter_state[7:12], given_letter_state[7:12])  # Combined green info
+            new_letter_state[2:7] = torch.zeros(5, dtype=torch.float32)  # No yellow information
             new_letter_state[1] = 0  # Explicitly say it is not grey
             new_letter_state[0] = 0  # Explicitly say it is not unknown
 
     # Logic if there is a green in one and not the other
     if guess_green_idx and not state_green_idx:
         new_letter_state[7:12] = guess_letter_state[7:12]  # Green information
-        new_letter_state[2:7] = torch.zeros(
-            5, dtype=torch.float32
-        )  # No yellow information
+        new_letter_state[2:7] = torch.zeros(5, dtype=torch.float32)  # No yellow information
         new_letter_state[1] = 0  # Explicitly say it is not grey
         new_letter_state[0] = 0  # Explicitly say it is not unknown
     if state_green_idx and not guess_green_idx:
@@ -61,23 +51,15 @@ def update_letter_state(
     # Logic if there are no greens
     if not guess_green_idx and not state_green_idx:
         if guess_yellow_idx or state_yellow_idx:
-            new_letter_state[7:12] = torch.zeros(
-                5, dtype=torch.float32
-            )  # No green information
-            new_letter_state[2:7] = torch.max(
-                guess_letter_state[2:7], given_letter_state[2:7]
-            )
+            new_letter_state[7:12] = torch.zeros(5, dtype=torch.float32)  # No green information
+            new_letter_state[2:7] = torch.max(guess_letter_state[2:7], given_letter_state[2:7])
             # Combining the yellow information
             new_letter_state[1] = 0  # Explicitly say it is not grey
             new_letter_state[0] = 0  # Explicitly say it is not unknown
         # Logic if no yellows as well
         if not guess_yellow_idx and not state_yellow_idx:
-            new_letter_state[7:12] = torch.zeros(
-                5, dtype=torch.float32
-            )  # No green info
-            new_letter_state[2:7] = torch.zeros(
-                5, dtype=torch.float32
-            )  # No yellow info
+            new_letter_state[7:12] = torch.zeros(5, dtype=torch.float32)  # No green info
+            new_letter_state[2:7] = torch.zeros(5, dtype=torch.float32)  # No yellow info
             new_letter_state[1] = 1  # If no yellows or greens, must be grey
             new_letter_state[0] = 0  # Explicitly say it is not unknown
 
@@ -117,19 +99,11 @@ def update_alphabet_state(given_alphabet_state, guess_word, target_word):
                 guess_letter_state[1] = 1  # Grey
 
         # Indices from the old letter state
-        state_green_idx = [
-            j + 7 for j, val in enumerate(old_letter_state[7:12]) if val == 1
-        ]
-        state_yellow_idx = [
-            j + 2 for j, val in enumerate(old_letter_state[2:7]) if val == 1
-        ]
+        state_green_idx = [j + 7 for j, val in enumerate(old_letter_state[7:12]) if val == 1]
+        state_yellow_idx = [j + 2 for j, val in enumerate(old_letter_state[2:7]) if val == 1]
         # Indices from the guess
-        guess_green_idx = [
-            j + 7 for j, val in enumerate(guess_letter_state[7:12]) if val == 1
-        ]
-        guess_yellow_idx = [
-            j + 2 for j, val in enumerate(guess_letter_state[2:7]) if val == 1
-        ]
+        guess_green_idx = [j + 7 for j, val in enumerate(guess_letter_state[7:12]) if val == 1]
+        guess_yellow_idx = [j + 2 for j, val in enumerate(guess_letter_state[2:7]) if val == 1]
 
         # Update letter state
         new_letter_state = update_letter_state(

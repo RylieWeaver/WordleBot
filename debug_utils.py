@@ -9,9 +9,7 @@ def examine_gradients(actor_critic_net):
     for name, param in actor_critic_net.named_parameters():
         if param.grad is not None:
             grad_flat = param.grad.view(-1).detach().cpu().numpy()  # Flatten gradient
-            grad_percentiles = np.percentile(
-                grad_flat, percentiles
-            )  # Compute percentiles
+            grad_percentiles = np.percentile(grad_flat, percentiles)  # Compute percentiles
             gradient_data.append((name, grad_percentiles))
 
     # Display results
