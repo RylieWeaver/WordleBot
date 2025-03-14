@@ -5,7 +5,7 @@ import torch.nn.functional as F
 def calculate_loss_mcts(
     old_policy_probs,
     policy_probs,
-    action_probs,
+    mcts_probs,
     advantages,
     actor_coef,
     critic_coef,
@@ -16,25 +16,39 @@ def calculate_loss_mcts(
     norm=True,
 ):
     """
-    Calculate the total loss for a batch given:
-    (1) Advantages, log_probs, critic_losses, entropies
-    (2) Masks for guess idx and when active.
+    Calculate the total loss for a batch.
+
+    Input:
+      - old_policy_probs: [batch_dim, max_guesses, vocab_size]
+      - policy_probs: [batch_dim, max_guesses, vocab_size]
+      - mcts_probs: [batch_dim, max_guesses, vocab_size]
+      - advantages: [batch_dim, max_guesses]
+      - actor_coef: float
+      - critic_coef: float
+      - entropy_coef: float
+      - kl_coef: float
+      - guess_mask: [batch_dim, max_guesses, vocab_size] (1 if guess word was chosen, 0 otherwise)
+      - active_mask: [batch_dim, max_guesses+1] (1 if game is active (because word was not yet guessed, 0 otherwise)
     """
 
-    # Mask
-    advantages = advantages[active_mask[:, :-1]]
-    old_policy_probs = old_policy_probs[active_mask[:, :-1]]
-    # Mask the probs by activity for KL and entropy, then by activate guess for actor loss
-    policy_probs = policy_probs[active_mask[:, :-1]]
+    # Mask for the game being active
+    advantages = advantages[active_mask[:, :-1]]  # Used for actor and critic losses
+    old_policy_probs = old_policy_probs[active_mask[:, :-1]]  # Used for KL
+    policy_probs = policy_probs[active_mask[:, :-1]]  # Used for KL and entropy
+    mcts_probs = mcts_probs[active_mask[:, :-1]]
+    # Mask for the actions that are chosen
     active_guess_mask = guess_mask[active_mask[:, :-1]]
-    action_probs = action_probs[active_guess_mask]
+    action_policy_probs = policy_probs[active_guess_mask]
+    action_mcts_probs = mcts_probs[active_guess_mask]
 
     # Calculate stats
+    critic_losses = advantages.pow(2)
     old_policy_log_probs = torch.log(old_policy_probs + 1e-8)
     policy_log_probs = torch.log(policy_probs + 1e-8)
-    action_log_probs = torch.log(action_probs + 1e-8)
+    mcts_log_probs = torch.log(mcts_probs + 1e-8)
+    action_policy_log_probs = torch.log(action_policy_probs + 1e-8)
+    action_mcts_log_probs = torch.log(action_mcts_probs + 1e-8)
     entropies = -torch.sum(policy_probs * policy_log_probs, dim=-1)
-    critic_losses = advantages.pow(2)
 
     # Normalize advantages
     if norm:
@@ -43,9 +57,12 @@ def calculate_loss_mcts(
         advantages = (advantages - mean_adv) / std_adv
 
     # Compute losses
-    # actor_loss = -(advantages * chosen_log_probs).mean()
-    actor_loss = -torch.sum(action_probs * policy_log_probs, dim=-1).mean()  # actor loss is cross-entropy between action probs and policy probs
+    ## Actor
+    # actor_loss = -(advantages * action_log_probs).mean()  # This tries to match the policy to the value network
+    actor_loss = -torch.sum(mcts_probs * policy_log_probs, dim=-1).mean()  # This tries to match the policy to the MCTS actions taken
+    ## Critic
     critic_loss = critic_losses.mean()
+    ## Regularization
     entropy_loss = -entropies.mean()
     kl_loss = F.kl_div(old_policy_log_probs, policy_log_probs, reduction="batchmean", log_target=True)
 

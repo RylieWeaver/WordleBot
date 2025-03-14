@@ -130,11 +130,10 @@ def calculate_rewards(new_alphabet_states, given_alphabet_states, guess_words, t
 ############################################
 # SIMULATION UTILS
 ############################################
-def make_probs(logits, alpha, temperature, guess_mask_batch=None):
+def make_probs(logits, alpha, temperature):
     """
     Returns the final probabilities after mixing with uniform distribution and temperature scaling.
     - logits: [batch_size, action_size]
-    - guess_mask_batch: [batch_size, max_guesses, action_size] (mask of already guessed words)
     - alpha: float (uniform mixing parameter)
     - temperature: float (temperature for softmax)
     """
@@ -145,12 +144,6 @@ def make_probs(logits, alpha, temperature, guess_mask_batch=None):
     # Uniform distribution for alpha-mixing
     uniform_probs = torch.ones_like(probs) / probs.size(-1)
     probs = alpha * uniform_probs + (1 - alpha) * probs
-
-    # Mask out already guessed words
-    if guess_mask_batch is not None:
-        guessed = torch.any(guess_mask_batch, dim=1)  # shape: [batch_size, action_size]
-        probs = probs * ~guessed  # Mask out already guessed words
-        probs = probs / probs.sum(dim=-1, keepdim=True)  # Renormalize
 
     return probs
 
@@ -170,7 +163,13 @@ def select_actions(actor_critic_net, alphabet_states, guess_states, guess_num, g
     # Forward pass to get logits and value
     states = torch.cat([alphabet_states.view(-1, 26 * 11), guess_states], dim=-1)  # shape: [batch_size, 26*11 + max_guesses]
     logits, values = actor_critic_net(states)  # shape: logits=[batch_size, action_size], values=[batch_size,1]
-    probs = make_probs(logits, alpha, temperature, guess_mask_batch)  # shape: [batch_size, action_size]
+    probs = make_probs(logits, alpha, temperature)  # shape: [batch_size, action_size]
+
+    # # Mask out already guessed words
+    # if guess_mask_batch is not None:
+    #     guessed = torch.any(guess_mask_batch, dim=1)  # shape: [batch_size, action_size]
+    #     probs = probs * ~guessed  # Mask out already guessed words
+    #     probs = probs / probs.sum(dim=-1, keepdim=True)  # Renormalize
 
     # Sample actions
     if not argmax:
@@ -232,7 +231,7 @@ def collect_episodes(actor_critic_net, vocab, target_words, alpha, temperature, 
     alphabet_states_batch = torch.zeros((batch_size, max_guesses + 1, 26, 11), dtype=torch.float32)
     guess_states_batch = torch.zeros((batch_size, max_guesses + 1, max_guesses), dtype=torch.float32)
     policy_probs_batch = torch.zeros((batch_size, max_guesses, action_size), dtype=torch.float32)
-    action_probs_batch = torch.zeros((batch_size, max_guesses, action_size), dtype=torch.float32)
+    mcts_probs_batch = torch.zeros((batch_size, max_guesses, action_size), dtype=torch.float32)
     rewards_batch = torch.zeros((batch_size, max_guesses), dtype=torch.float32)
     guess_mask_batch = torch.zeros((batch_size, max_guesses, action_size), dtype=torch.bool)
     correct_mask_batch = torch.zeros((batch_size, max_guesses), dtype=torch.bool)
@@ -252,12 +251,12 @@ def collect_episodes(actor_critic_net, vocab, target_words, alpha, temperature, 
         guess_states_batch[:, guess_num] = guess_states
 
         # # Select action
-        # policy_probs, action_probs, values, guess_idx, guess_words = select_actions(
+        # policy_probs, values, guess_idx, guess_words = select_actions(
         #     actor_critic_net, alphabet_states, guess_states, guess_num, guess_mask_batch, target_words, vocab, alpha, temperature, argmax
         # )
 
         # Select action with MCTS
-        policy_probs, action_probs, values, guess_idx, guess_words = select_actions_mcts(
+        policy_probs, mcts_probs, values, guess_idx, guess_words = select_actions_mcts(
             actor_critic_net,
             alphabet_states,
             guess_states,
@@ -276,7 +275,7 @@ def collect_episodes(actor_critic_net, vocab, target_words, alpha, temperature, 
 
         # Update
         policy_probs_batch[:, guess_num, :] = policy_probs
-        action_probs_batch[:, guess_num, :] = action_probs
+        mcts_probs_batch[:, guess_num, :] = mcts_probs
         rewards_batch[:, guess_num] = rewards
         guess_mask_batch[:, guess_num] = guess_idx
         guess_words_batch.append(guess_words)
@@ -290,7 +289,7 @@ def collect_episodes(actor_critic_net, vocab, target_words, alpha, temperature, 
         guess_states_batch,
         rewards_batch,
         policy_probs_batch,
-        action_probs_batch,
+        mcts_probs_batch,
         guess_mask_batch,
         guess_words_batch,
         correct_mask_batch,
@@ -330,7 +329,7 @@ def process_episodes(actor_critic_net, states_batch, rewards_batch, guess_mask_b
         advantages_batch[:, t] = gae
 
     # Calculate the final probs
-    probs_batch = make_probs(logits_batch, alpha, temperature, guess_mask_batch)
+    probs_batch = make_probs(logits_batch, alpha, temperature)
 
     return advantages_batch, probs_batch
 
@@ -369,7 +368,7 @@ def process_episodes_mcts(actor_critic_net, alphabet_states_batch, guess_states_
         advantages_batch[:, t] = gae
 
     # Calculate the final probs
-    policy_probs_batch = make_probs(logits_batch, alpha, temperature, guess_mask_batch)
+    policy_probs_batch = make_probs(logits_batch, alpha, temperature)
 
     return advantages_batch, policy_probs_batch
 
@@ -561,8 +560,8 @@ def mcts_search(
     alpha,
     temperature,
     argmax,
-    num_simulations=10,
-    top_k=5,
+    num_simulations=3,
+    top_k=3,
     c_puct=1.0,
 ):
     """
@@ -611,7 +610,7 @@ def mcts_search(
         root_node.expand(actor_critic_net, vocab, alpha, temperature, top_k=top_k)
 
         # 2) Run repeated simulations
-        for _ in range(num_simulations):
+        for sim_num in range(num_simulations):
             node = root_node
             path = [node]
 
@@ -646,7 +645,7 @@ def mcts_search(
     return batch_action_visits
 
 
-def select_actions_mcts(actor_critic_net, alphabet_states, guess_states, guess_num, guess_mask_batch, target_words, vocab, alpha, temperature, argmax=False, num_simulations=30, top_k=50, c_puct=1.0):
+def select_actions_mcts(actor_critic_net, alphabet_states, guess_states, guess_num, guess_mask_batch, target_words, vocab, alpha, temperature, argmax=False, num_simulations=3, top_k=3, c_puct=1.0):
     """
     Select actions using MCTS for a batch of environments.
     - alphabet_states: [batch_size, 26, 11]
@@ -663,7 +662,13 @@ def select_actions_mcts(actor_critic_net, alphabet_states, guess_states, guess_n
     # Forward pass to get logits and value
     states = torch.cat([alphabet_states.view(-1, 26 * 11), guess_states], dim=-1)  # shape: [batch_size, 26*11 + max_guesses]
     logits, values = actor_critic_net(states)  # shape: logits=[batch_size, action_size], values=[batch_size, 1]
-    policy_probs = make_probs(logits, alpha, temperature, guess_mask_batch)  # shape: [batch_size, action_size]
+    policy_probs = make_probs(logits, alpha, temperature)  # shape: [batch_size, action_size]
+
+    # # Mask out already guessed words
+    # if guess_mask_batch is not None:
+    #     guessed = torch.any(guess_mask_batch, dim=1)  # shape: [batch_size, action_size]
+    #     probs = probs * ~guessed  # Mask out already guessed words
+    #     probs = probs / probs.sum(dim=-1, keepdim=True)  # Renormalize
 
     # Get the actions from MCTS
     guess_visits = mcts_search(
@@ -681,14 +686,14 @@ def select_actions_mcts(actor_critic_net, alphabet_states, guess_states, guess_n
         top_k=top_k,
         c_puct=c_puct,
     )  # shape: [batch_size], [batch_size, action_size]
-    action_probs = make_probs(torch.log(guess_visits + 1e-8), 0.0, temperature, guess_mask_batch)  # shape: [batch_size, action_size]  # Use no uniform randomness in MCTS
+    mcts_probs = make_probs(torch.log(guess_visits + 1e-8), 0.0, temperature)  # shape: [batch_size, action_size]  # Use no uniform randomness in MCTS
 
     # Sample actions
     if not argmax:
-        guess_idx = torch.multinomial(action_probs, 1).squeeze()  # shape: [batch_size]
+        guess_idx = torch.multinomial(mcts_probs, 1).squeeze()  # shape: [batch_size]
     else:
-        guess_idx = torch.argmax(action_probs, dim=1).squeeze()  # shape: [batch_size]
+        guess_idx = torch.argmax(mcts_probs, dim=1).squeeze()  # shape: [batch_size]
     guess_words = [vocab[idx] for idx in guess_idx]  # shape: [batch_size]
-    guess_idx = F.one_hot(guess_idx, num_classes=action_probs.shape[-1]).float()  # shape: [batch_size, action_size]
+    guess_idx = F.one_hot(guess_idx, num_classes=mcts_probs.shape[-1]).float()  # shape: [batch_size, action_size]
 
-    return policy_probs, action_probs, values, guess_idx, guess_words
+    return policy_probs, mcts_probs, values, guess_idx, guess_words

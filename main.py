@@ -7,7 +7,7 @@ def main():
     # Instantiate hyperparameters
     epochs = 50000
     lr = 3e-4
-    batch_size = 10
+    batch_size = 100
     vocab_size = 1000
 
     # Instantiate data

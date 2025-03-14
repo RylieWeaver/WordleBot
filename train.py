@@ -42,8 +42,8 @@ def train(
 
     min_lr = lr / 1e1
     lr_decay_factor = 0.099
-    patience = 10
-    alpha = 0.99
+    patience = 3
+    alpha = 0.05
     min_alpha = 0.03
     temperature = 3.0
     min_temperature = 0.01
@@ -64,7 +64,7 @@ def train(
                 guess_states_batch,
                 rewards_batch,
                 old_policy_probs_batch,
-                action_probs_batch,
+                mcts_probs_batch,
                 guess_mask_batch,
                 guess_words_batch,
                 correct_mask_batch,
@@ -98,7 +98,7 @@ def train(
             loss, actor_loss, critic_loss, entropy_loss, kl_loss = calculate_loss_mcts(
                 old_policy_probs_batch,
                 policy_probs_batch,
-                action_probs_batch,
+                mcts_probs_batch,
                 advantages_batch,
                 actor_coef,
                 critic_coef,
@@ -202,11 +202,14 @@ def test(
         for batch_idx, target_words in enumerate(test_loader):
             # -------- Run episodes --------
             (
-                states_batch,
-                probs_batch,
+                alphabet_states_batch,
+                guess_states_batch,
                 rewards_batch,
+                old_policy_probs_batch,
+                mcts_probs_batch,
                 guess_mask_batch,
                 guess_words_batch,
+                correct_mask_batch,
                 active_mask_batch,
             ) = collect_episodes(
                 actor_critic_net,
@@ -219,10 +222,13 @@ def test(
             )
 
             # ---------------- Process Episodes ----------------
-            advantages_batch, probs_batch = process_episodes(
+            advantages_batch, policy_probs_batch = process_episodes_mcts(
                 actor_critic_net,
-                states_batch,
+                alphabet_states_batch,
+                guess_states_batch,
                 rewards_batch,
+                guess_mask_batch,
+                correct_mask_batch,
                 active_mask_batch,
                 alpha,
                 temperature,
@@ -231,16 +237,11 @@ def test(
             )
 
             # -------------- Compute Loss --------------
-            (
-                batch_loss,
-                batch_actor_loss,
-                batch_critic_loss,
-                batch_entropy_loss,
-                batch_kl_loss,
-            ) = calculate_loss(
+            batch_loss, batch_actor_loss, batch_critic_loss, batch_entropy_loss, batch_kl_loss = calculate_loss_mcts(
+                old_policy_probs_batch,
+                policy_probs_batch,
+                mcts_probs_batch,
                 advantages_batch,
-                probs_batch,
-                probs_batch,
                 actor_coef,
                 critic_coef,
                 entropy_coef,
@@ -249,6 +250,7 @@ def test(
                 active_mask_batch,
                 norm=True,
             )
+
             test_loss += batch_loss.item()
             test_actor_loss += batch_actor_loss.item()
             test_critic_loss += batch_critic_loss.item()

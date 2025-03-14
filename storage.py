@@ -4,6 +4,9 @@
 
 import torch
 
+# device = torch.device("mps")
+# model = MyModel().to(device)
+
 
 ############################################
 # STATE UTILS
