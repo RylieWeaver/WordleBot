@@ -86,8 +86,8 @@ def calculate_alphabet_scores(alphabet_states):
     # Define value weights
     weights = torch.cat(
         [
-            torch.tensor([0.5]),  # Number of known occurences
-            torch.tensor([1.0]).repeat(5),  # Matching letter and placement (greens)
+            torch.tensor([0.2]),  # Number of known occurences
+            torch.tensor([0.5]).repeat(5),  # Matching letter and placement (greens)
             torch.tensor([0.02]).repeat(5),  # Unmatching letter and placement (yellows / greys)
         ]
     ).view(
@@ -122,7 +122,7 @@ def calculate_rewards(new_alphabet_states, given_alphabet_states, guess_words, t
         [1.0 if guess_words[i] == target_words[i] else 0.0 for i in range(len(guess_words))],
         dtype=torch.float32,
     )
-    rewards += 5.0 * correct_mask  # shape [batch_size]
+    rewards += 10.0 * correct_mask  # shape [batch_size]
 
     return rewards
 

@@ -60,10 +60,10 @@ def evolve_policy_params(alpha, temperature, min_alpha, min_temperature):
     old_alpha, old_temp = alpha, temperature
 
     if alpha > min_alpha:
-        alpha = max(min_alpha, alpha - 0.03)
+        alpha = max(min_alpha, alpha - 0.01)
     else:
         # If alpha is already min, reduce temperature
-        if temperature > 5.0:
+        if temperature > 3.0:
             temperature -= 0.1
         elif temperature > 1.0:
             temperature -= 0.03

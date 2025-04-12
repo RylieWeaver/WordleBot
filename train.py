@@ -38,11 +38,11 @@ def train(
     # ---------------- Setup ----------------
     train_loader = DataLoader(vocab, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(vocab, batch_size=batch_size, shuffle=False)
-    optimizer = optim.Adam(actor_critic_net.parameters(), lr=lr)
+    optimizer = optim.AdamW(actor_critic_net.parameters(), lr=lr, weight_decay=1e-4)
 
-    min_lr = lr / 1e1
-    lr_decay_factor = 0.099
-    patience = 10
+    min_lr = lr / 3
+    lr_decay_factor = 0.3
+    patience = 3
     alpha = 1.0
     min_alpha = 0.03
     temperature = 3.0
@@ -98,7 +98,7 @@ def train(
             # -------------- Backprop --------------
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=10.0)
+            torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=5.0)
             optimizer.step()
 
         # ---------------- Evaluate Learning on Full Vocab ----------------

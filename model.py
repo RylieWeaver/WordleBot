@@ -7,17 +7,18 @@ import torch.nn.functional as F
 # NETWORK
 ############################################
 class ActorCriticNet(nn.Module):
-    def __init__(self, state_size, vocab_size, hidden_dim=128, layers=2):
+    def __init__(self, state_size, vocab_size, hidden_dim=128, layers=3, dropout=0.1):
         super().__init__()
         self.network = nn.ModuleList()
         self.act = nn.SiLU()
         self.norm = nn.LayerNorm(hidden_dim)
+        self.dropout = nn.Dropout(dropout)
 
         # Embedding layers
-        self.embed = nn.Sequential(nn.Linear(state_size, hidden_dim), self.act, self.norm)  # First layer embeds the input to hidden_dim
+        self.embed = nn.Sequential(nn.Linear(state_size, hidden_dim), self.norm, self.act, self.dropout)  # First layer embeds the input to hidden_dim
 
-        for _ in range(layers - 1):
-            self.network.append(nn.Sequential(nn.Linear(hidden_dim, hidden_dim), self.act, self.norm))
+        for _ in range(layers):
+            self.network.append(nn.Sequential(nn.Linear(hidden_dim, hidden_dim), self.norm, self.act, self.dropout))
 
         # Output heads
         self.logits = nn.Linear(hidden_dim, vocab_size)
