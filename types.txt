@@ -1,0 +1,8 @@
+# Data Structures Types:
+## Torch Tensors
+### States are float
+### Word Tensors are float
+### Probs are float
+### Values and rewards are float
+### Masks are bool
+### Losses are floats

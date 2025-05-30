@@ -1,0 +1,55 @@
+{
+    "Data": {
+        "state_size": 292,
+        "max_guesses": 6
+    },
+    "Model": {
+        "hidden_dim": 1024,
+        "layers": 3,
+        "dropout": 0.1,
+        "device": "mps"
+    },
+    "Training": {
+        "epochs": 1000000,
+        "lr": 5e-4,
+        "batch_size": 2315,
+        "minibatch_size": 200,
+        "search": {
+            "k": 5,
+            "r": 4,
+            "train_search": false,
+            "test_search": false
+        },
+        "rewards": {
+            "gamma": 0.99,
+            "lam": 0.95,
+            "m": 5
+        },
+        "loss": {
+            "actor_coef": 0.5,
+            "critic_coef": 2.0,
+            "entropy_coef": 0.05,
+            "kl_reg_coef": 0.5,
+            "kl_guide_coef": 0.5,
+            "kl_best_coef": 1.0
+        },
+        "peek": 0.1,
+        "scheduling": {
+            "global_lr_decay": 0.999,
+            "min_lr_factor": 0.04,
+            "lr_decay_factor": 0.5,
+            "greedify_patience": 5,
+            "early_stopping_patience": 1000
+        },
+        "log": {
+            "enabled": true,
+            "dir": "full_run"
+        }
+    },
+    "Exploration": {
+        "alpha": 1.0,
+        "min_alpha": 0.0,
+        "temperature": 3.0,
+        "min_temperature": 0.01
+    }
+}

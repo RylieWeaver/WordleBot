@@ -1,0 +1,57 @@
+{
+    "Data": {
+        "state_size": 292,
+        "max_guesses": 6,
+        "guess_vocab_size": 10657,
+        "target_vocab_size": 2315
+    },
+    "Model": {
+        "hidden_dim": 1024,
+        "layers": 3,
+        "dropout": 0.1,
+        "device": "cpu"
+    },
+    "Training": {
+        "epochs": 1000000,
+        "lr": 3e-4,
+        "batch_size": 100,
+        "minibatch_size": null,
+        "search": {
+            "k": 5,
+            "r": 5,
+            "train_search": false,
+            "test_search": false
+        },
+        "rewards": {
+            "gamma": 0.99,
+            "lam": 0.95,
+            "m": 3
+        },
+        "loss": {
+            "actor_coef": 0.5,
+            "critic_coef": 2.0,
+            "entropy_coef": 0.05,
+            "kl_reg_coef": 0.5,
+            "kl_guide_coef": 0.5,
+            "kl_best_coef": 1.0
+        },
+        "peek": 0.1,
+        "scheduling": {
+            "global_lr_decay": 0.999,
+            "min_lr_factor": 0.33,
+            "lr_decay_factor": 0.3,
+            "greedify_patience": 3,
+            "early_stopping_patience": 1000
+        },
+        "log": {
+            "enabled": false,
+            "dir": "log_dir"
+        }
+    },
+    "Exploration": {
+        "alpha": 1.0,
+        "min_alpha": 0.0,
+        "temperature": 3.0,
+        "min_temperature": 0.01
+    }
+}
