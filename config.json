@@ -2,8 +2,8 @@
     "Data": {
         "state_size": 292,
         "max_guesses": 6,
-        "guess_vocab_size": 1000,
-        "target_vocab_size": 200
+        "guess_vocab_size": 500,
+        "target_vocab_size": 100
     },
     "Model": {
         "hidden_dim": 1024,
@@ -13,7 +13,7 @@
     },
     "Training": {
         "epochs": 1000000,
-        "lr": 1e-5,
+        "lr": 1e-4,
         "batch_size": 100,
         "minibatch_size": null,
         "search": {
@@ -25,7 +25,7 @@
         "rewards": {
             "gamma": 0.999,
             "lam": 0.2,
-            "m": 5
+            "m": 3
         },
         "loss": {
             "actor_coef": 1.0,
@@ -44,7 +44,7 @@
             "early_stopping_patience": 1000
         },
         "log": {
-            "enabled": true,
+            "enabled": false,
             "dir": "log_dir"
         }
     },
