@@ -51,9 +51,9 @@
     "Exploration": {
         "alpha": 1.0,
         "min_alpha": 0.0,
-        "alpha_step": 0.05,
+        "alpha_step": 0.01,
         "temperature": 1.0,
         "min_temperature": 0.001,
-        "temperature_decay_factor": 0.95
+        "temperature_decay_factor": 0.99
     }
 }
