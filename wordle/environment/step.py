@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 # Wordle
 from wordle.data import tensor_to_words
-from wordle.environment import update_alphabet_states, calculate_entropy_rewards
+from wordle.environment import update_alphabet_states, calculate_entropy_rewards, calculate_entropy_rewards_loop
 
 
 def make_probs(logits, alpha, temperature, valid_mask=None):
@@ -149,7 +149,6 @@ def select_actions(
     - guess_idx_onehot: [batch_size, *, total_vocab_size]
     - guess_tensor: [batch_size, *, 5]
     """
-    # print(time.time(), "Checpoint 0...")
 
     # Setup
     device = actor_critic_net.device
@@ -249,5 +248,15 @@ def simulate_actions(
         target_vocab_states,  # [*, vocab_size, 26, 11]
         correct  # [batch_size, *]
     )  # [batch_size, *], [batch_size, *], [batch_size, *, vocab_size]
+
+    # NOTE: Testing
+    # # Calculate candidate rewards for-loop
+    # rewards, new_alphabet_entropy, new_target_mask = calculate_entropy_rewards_loop(
+    #     alphabet_entropy,   # [batch_size, *, 26, 11]
+    #     target_mask,  # [batch_size, *, vocab_size]
+    #     new_alphabet_states,  # [batch_size, *, 26, 11]
+    #     target_vocab_states,  # [*, vocab_size, 26, 11]
+    #     correct  # [batch_size, *]
+    # )  # [batch_size, *], [batch_size, *], [batch_size, *, vocab_size]
 
     return new_alphabet_states, new_guess_states, new_alphabet_entropy, new_target_mask, values, rewards, correct

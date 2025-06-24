@@ -145,6 +145,7 @@ def collect_episodes(
             )
 
         # Get rewards and values for the possible target words
+        # m = min(max(target_mask.sum(dim=-1)), m)  # NOTE: Testing; sample up to m targets, but not more than available
         cand_targets = sample_possible_targets(target_mask, m)  # [batch_size, m]
         cand_target_tensor = target_vocab_tensor[cand_targets]  # [batch_size, m, 5]
         _, _, _, _, cand_values, cand_rewards, _ = simulate_actions(
@@ -157,8 +158,20 @@ def collect_episodes(
             guess_tensor.unsqueeze(1).expand(-1, m, -1),
             cand_target_tensor,
         )
-        expected_values = cand_values.mean(dim=-1)  # [batch_size]
+        expected_values = cand_values.mean(dim=-1)
         expected_rewards = cand_rewards.mean(dim=-1)
+        # NOTE: Testing
+        # # Do in a for-loop
+        # _, _, _, _, expected_values, expected_rewards, _ = simulate_actions(
+        #     actor_critic_net,
+        #     alphabet_states,
+        #     guess_states,
+        #     alphabet_entropy,
+        #     target_mask,
+        #     target_vocab_states,
+        #     guess_tensor,
+        #     total_vocab_tensor,
+        # )
 
         # Update the state based on the true target word
         alphabet_states, guess_states, alphabet_entropy, target_mask, values, rewards, correct = simulate_actions(

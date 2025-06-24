@@ -5,14 +5,14 @@ import time
 
 # Torch
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 import torch.optim as optim
 
 # Wordle
 from wordle.data import words_to_tensor, tensor_to_words, construct_vocab_states, HardWordBuffer
 from wordle.environment import collect_episodes, process_episodes
 from wordle.train import calculate_loss, evolve_learning_params
-from wordle.utils import measure_grad_norms, save_checkpoint
+from wordle.utils import measure_grad_norms, save_checkpoint, rest_computer
 
 
 
@@ -44,12 +44,14 @@ def train(
     peek,
     alpha,
     min_alpha,
+    alpha_step,
     temperature,
     min_temperature,
+    temperature_decay_factor,
     checkpointing,
     log_dir,
-    global_lr_decay,
     min_lr_factor,
+    global_lr_decay_factor,
     lr_decay_factor,
     greedify_patience,
     early_stopping_patience,
@@ -77,8 +79,21 @@ def train(
     target_vocab_states = construct_vocab_states(words_to_tensor(target_vocab).to(device))  # [target_vocab_size, 26, 11]
 
     train_loader = DataLoader(torch.arange(len(target_vocab)), batch_size=batch_size, shuffle=True)
-    replay_loader = HardWordBuffer(target_vocab, batch_size=batch_size, capacity=max(int(0.05*len(target_vocab)), 1))
+    replay_loader = HardWordBuffer(target_vocab, batch_size=batch_size, capacity=max(int(0.05*len(target_vocab)), 1), replay_ratio=0.2, rho=0.1)
     test_loader = DataLoader(torch.arange(len(target_vocab)), batch_size=batch_size, shuffle=False)
+
+    # NOTE: Testing
+    # train_loader = DataLoader(
+    #     torch.arange(len(target_vocab)),
+    #     batch_size=batch_size,
+    #     sampler=RandomSampler(
+    #         torch.arange(len(target_vocab)),
+    #         replacement=True,
+    #         num_samples=batch_size),
+    #     drop_last=True)
+    # replay_loader = HardWordBuffer(target_vocab, batch_size=len(target_vocab), capacity=max(int(0.05*len(target_vocab)), 1), replay_ratio=0.2, rho=0.1)
+    # test_loader = DataLoader(torch.arange(len(target_vocab)), batch_size=len(target_vocab), shuffle=False)
+
     replay=True
     optimizer = optim.AdamW(actor_critic_net.parameters(), lr=lr, weight_decay=1e-4)
 
@@ -108,9 +123,9 @@ def train(
             for attempt in range(1, max_attempts + 1):
                 try:
                     correct_batch = []
-                    loss = actor_loss = critic_loss = entropy_loss = kl_reg_loss = kl_guide_loss = kl_best_loss = torch.zeros(1, device=device)
                     for start in range(0, len(selected_idx), mb_size):
                         mb_idx = selected_idx[start:start+mb_size]
+                        mb_proportion = (len(mb_idx) / len(selected_idx))
                         target_tensor = target_vocab_tensor[mb_idx]
                         # -------- Collect episodes using the old policy --------
                         (alphabet_states_minibatch, guess_states_minibatch, old_probs_minibatch, guide_probs_minibatch, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
@@ -168,7 +183,7 @@ def train(
 
                         # -------------- Compute Loss --------------
                         # The KL divergence should be 0 on the first batch in an epoch, but it is often not 
-                        # because of a non-deterministic forward (e.g. dropout) Setting to 0 removes some noise
+                        # because of a non-deterministic forward (e.g. dropout). Setting to 0 removes some noise
                         passed_kl_reg_coef = kl_reg_coef if (batch_idx!=0) else 0.0
                         (loss_mb, actor_loss_mb, critic_loss_mb, entropy_loss_mb, kl_reg_loss_mb, kl_guide_loss_mb, kl_best_loss_mb) = calculate_loss(
                             advantages_minibatch,
@@ -188,36 +203,37 @@ def train(
                             norm=True,
                         )
 
+                        # ------------------ Normalize Minibatch Losses ------------------
+                        # Total loss should be invariant to minibatch size
+                        loss_mb = loss_mb / mb_proportion
+                        actor_loss_mb = actor_loss_mb / mb_proportion
+                        critic_loss_mb = critic_loss_mb / mb_proportion
+                        entropy_loss_mb = entropy_loss_mb / mb_proportion
+                        kl_reg_loss_mb = kl_reg_loss_mb / mb_proportion
+                        kl_guide_loss_mb = kl_guide_loss_mb / mb_proportion
+                        kl_best_loss_mb = kl_best_loss_mb / mb_proportion
+
+                        # ---------------- Measure Grad Norms ----------------
+                        if (epoch%25 == 0) and (batch_idx == len(train_loader)-1) and (mb_idx[-1] == selected_idx[-1]):  # Measure grad norms on the last minibatch of the last batch of every epochs
+                            actor_grad_norm, critic_grad_norm, entropy_grad_norm, kl_reg_grad_norm, kl_guide_grad_norm, kl_best_grad_norm = measure_grad_norms(
+                                actor_critic_net,
+                                actor_loss_mb, actor_coef,
+                                critic_loss_mb, critic_coef,
+                                entropy_loss_mb, entropy_coef,
+                                kl_reg_loss_mb, passed_kl_reg_coef,
+                                kl_guide_loss_mb, kl_guide_coef,
+                                kl_best_loss_mb, kl_best_coef,
+                            )
+                            print(f"Actor grad norm: {actor_grad_norm:.4f}, Critic grad norm: {critic_grad_norm:.4f}, Entropy grad norm: {entropy_grad_norm:.4f}, KL-Reg grad norm: {kl_reg_grad_norm:.4f}, KL-Guide grad norm: {kl_guide_grad_norm:.4f}, KL-Best grad norm: {kl_best_grad_norm:.4f}")
+
                         # ------------------ Accumulate Minibatch Results ------------------
-                        loss = loss + loss_mb
-                        actor_loss = actor_loss + actor_loss_mb
-                        critic_loss = critic_loss + critic_loss_mb
-                        entropy_loss = entropy_loss + entropy_loss_mb
-                        kl_reg_loss = kl_reg_loss + kl_reg_loss_mb
-                        kl_guide_loss = kl_guide_loss + kl_guide_loss_mb
-                        kl_best_loss = kl_best_loss + kl_best_loss_mb
+                        loss_mb.backward()
                         correct_batch.append(correct_minibatch)
 
-                    # ---------------- Concatenate minibatch results ----------------
+                    # ---------------- Concatenate correct for entire batch ----------------
                     correct_batch = torch.cat(correct_batch, dim=0)
 
-                    # ---------------- Measure Grad Norms ----------------
-                    if (epoch%25 == 0) and (batch_idx == len(train_loader)-1):
-                        actor_grad_norm, critic_grad_norm, entropy_grad_norm, kl_reg_grad_norm, kl_guide_grad_norm, kl_best_grad_norm = measure_grad_norms(
-                            actor_critic_net,
-                            optimizer,
-                            actor_loss, actor_coef,
-                            critic_loss, critic_coef,
-                            entropy_loss, entropy_coef,
-                            kl_reg_loss, passed_kl_reg_coef,
-                            kl_guide_loss, kl_guide_coef,
-                            kl_best_loss, kl_best_coef,
-                        )
-                        print(f"Actor grad norm: {actor_grad_norm:.4f}, Critic grad norm: {critic_grad_norm:.4f}, Entropy grad norm: {entropy_grad_norm:.4f}, KL-Reg grad norm: {kl_reg_grad_norm:.4f}, KL-Guide grad norm: {kl_guide_grad_norm:.4f}, KL-Best grad norm: {kl_best_grad_norm:.4f}")
-
                     # -------------- Backprop --------------
-                    optimizer.zero_grad()
-                    loss.backward()
                     torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=3.0)
                     optimizer.step()
 
@@ -229,7 +245,7 @@ def train(
                 except RuntimeError as e:
                     print(f"Skipping batch {batch_idx} in epoch {epoch} due to error:\n{e}")
                     if attempt == max_attempts:
-                        continue   # out of retries, re-raise
+                        continue   # out of retries, raise error
                     time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
@@ -266,7 +282,7 @@ def train(
             f"Epoch {epoch}/{epochs} | Acc: {test_accuracy:.2%} | Avg Guesses: {test_guesses:.2f} | "
             f"alpha={alpha:.2f}, temp={temperature:.2f} | Loss: {test_loss:.4f} | "
             f"Actor Loss: {test_actor_loss:.4f} * {actor_coef:.2f}, Critic Loss: {test_critic_loss:.4f} * {critic_coef:.2f}| "
-            f"Entropy Loss: {test_entropy_loss:.4f} * {entropy_coef:.2f}, Train KL-Reg Loss: {kl_reg_loss.item():.4f} * {kl_reg_coef:.2f}, "
+            f"Entropy Loss: {test_entropy_loss:.4f} * {entropy_coef:.2f}, Train KL-Reg Loss: {kl_reg_loss_mb.item():.4f} * {kl_reg_coef:.2f}, "
             f"Test KL-Guide Loss: {test_kl_guide_loss:.4f} * {kl_guide_coef:.2f}, Test KL-Best Loss: {test_kl_best_loss:.4f} * {kl_best_coef:.2f}, "
         )
         print(log_line)
@@ -278,45 +294,47 @@ def train(
         if (test_accuracy > best_accuracy or (test_accuracy == best_accuracy and test_guesses < best_guesses)):
             print(f'  -> New best model found')
             best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
-            best_accuracy = test_accuracy
-            best_guesses = test_guesses
             if checkpointing:
-                save_checkpoint(actor_critic_net, best_accuracy, best_guesses, config, log_dir)
+                save_checkpoint(actor_critic_net, test_accuracy, test_guesses, config, log_dir)
 
         # ---------------- Evolve Learning ----------------
         # Check improvement on test loss
-        if (test_actor_loss < best_test_actor_loss) or (test_critic_loss < best_test_critic_loss) or (test_accuracy > best_accuracy) or (test_accuracy == best_accuracy and test_guesses < best_guesses):
+        if ((test_actor_loss < best_test_actor_loss) or (test_critic_loss < best_test_critic_loss) or (test_accuracy > best_accuracy) or (test_accuracy == best_accuracy and test_guesses < best_guesses)):
             no_improve_count = 0
         else:
             no_improve_count += 1
-        best_test_actor_loss = min(test_actor_loss, best_test_actor_loss)
-        best_test_critic_loss = min(test_critic_loss, best_test_critic_loss)
-
         # If no improvement on test loss for 'greedify_patience' epochs => decay LR / evolve policy params alpha, temperature
         if no_improve_count >= greedify_patience:
             (lr, min_lr, alpha, temperature, best_test_actor_loss, best_test_critic_loss,) = evolve_learning_params(
                 optimizer,
                 alpha,
                 min_alpha,
+                alpha_step,
                 temperature,
                 min_temperature,
+                temperature_decay_factor,
                 lr,
                 min_lr,
-                global_lr_decay,
+                global_lr_decay_factor,
                 lr_decay_factor,
                 best_test_actor_loss,
                 best_test_critic_loss,
             )
             no_improve_count = 0
 
+        # ----------------- Update Statistics ----------------
+        best_accuracy = max(test_accuracy, best_accuracy)
+        best_guesses = min(test_guesses, best_guesses)
+        best_test_actor_loss = min(test_actor_loss, best_test_actor_loss)
+        best_test_critic_loss = min(test_critic_loss, best_test_critic_loss)
+
         # ---------------- Overall Early Stopping ----------------
         if no_improve_count >= early_stopping_patience:
             print(f'No improvement for {no_improve_count} epochs, stopping training.')
             break
 
-        # ---------------- Rest Computer for Long Training Runs ----------------
-        if len(target_vocab) == 2315:
-            time.sleep(5)
+        # ---------------- Rest Computer to Prevent Overheating ----------------
+        rest_computer(len(target_vocab))  # Rest based on target vocab length (proxy for experiment size)
             
     print('Training complete!')
 
