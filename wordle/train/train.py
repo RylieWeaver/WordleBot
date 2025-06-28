@@ -109,15 +109,17 @@ def train(
     no_improve_count = 0
 
     best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
-    window_size = 5
-    policy_buffer = deque(maxlen=window_size)
-    policy_buffer.append(copy.deepcopy(actor_critic_net).cpu())
+    window_size = 3
+    # policy_buffer = deque(maxlen=window_size)
+    # policy_buffer.append(copy.deepcopy(actor_critic_net).cpu())
     for epoch in range(epochs):
         # ------------------- INSTANTIATE NETWORKS -------------------
         actor_critic_net.train()
+        if epoch%window_size == 0:
+            old_policy_net = copy.deepcopy(actor_critic_net)
 
         for batch_idx, target_idx in enumerate(train_loader):
-            old_policy_net = policy_buffer[0].to(device).eval()  # Get the policy from window_size-1 steps ago or KL-reg
+            # old_policy_net = policy_buffer[0].to(device).eval()  # Get the policy from window_size-1 steps ago for KL-reg
             if replay:
                 replay_idx = torch.tensor(replay_loader.sample())
                 selected_idx = torch.cat((target_idx, replay_idx), dim=0)  # [batch_size + replay_ratio * batch_size]
@@ -135,7 +137,8 @@ def train(
                         target_tensor = target_vocab_tensor[mb_idx]
                         # -------- Collect episodes using the old policy --------
                         (alphabet_states_minibatch, guess_states_minibatch, old_probs_minibatch, guide_probs_minibatch, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
-                            old_policy_net,
+                            # old_policy_net,
+                            actor_critic_net,
                             total_vocab,
                             target_vocab,
                             total_vocab_tensor,
@@ -239,7 +242,7 @@ def train(
                     correct_batch = torch.cat(correct_batch, dim=0)
 
                     # ---------------- Update Buffer w/ Policy ----------------
-                    policy_buffer.append(copy.deepcopy(actor_critic_net).cpu())
+                    # policy_buffer.append(copy.deepcopy(actor_critic_net).cpu())
 
                     # -------------- Backprop --------------
                     torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=3.0)
