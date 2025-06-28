@@ -3,6 +3,20 @@ import torch
 import torch.nn.functional as F
 
 
+def log_normalize(probs, eps=1e-12, clamp=1e-12):
+    probs = probs + eps  # Avoid log(0)
+    probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(clamp)  # Normalize probabilities
+    return torch.log(probs)
+
+
+def softclamp_kl(log_p, log_q, max_kl=0.1):
+    kl_div = F.kl_div(log_p, log_q, reduction='none', log_target=True)
+    T = 4.0 / max_kl  # Temperature sets slope=1 at x=0
+    kl_div = ((max_kl * (1 / (1 + torch.exp(-T * kl_div)))) - 0.5).clamp_min(0.0)  # Smooth clamp and remove the 0.5 offset
+    kl_div = kl_div.sum(dim=-1)  # Sum over vocabulary dimension
+    return kl_div.mean()  # Return mean KL divergence over batch if needed
+
+
 def calculate_loss(
     advantages,
     old_probs,
@@ -43,30 +57,33 @@ def calculate_loss(
     - total_loss: weighted sum of all components
     - loss_components: actor_loss, critic_loss, entropy_loss, kl_reg_loss, kl_guide_loss, kl_best_loss
     """
+    # Setup
+    eps = 1e-10  # Small value to avoid instabilities
 
-    # Mask
+    # Mask prob distributions
     advantages_active = advantages[active_mask[:, :-1]]
     old_probs_active = old_probs[active_mask[:, :-1]]
     guide_probs_active = guide_probs[active_mask[:, :-1]]
     best_probs_active = best_probs[active_mask[:, :-1]]
-    # Mask the probs by activity for KL, then by activate guess for actor loss
     probs_active = probs[active_mask[:, :-1]]
-    active_guess_mask = guess_mask[active_mask[:, :-1]]
-    chosen_probs = probs_active[active_guess_mask]
 
-    # Calculate stats
-    old_log_probs_active = torch.log(old_probs_active + 1e-9)
-    guide_log_probs_active = torch.log(guide_probs_active + 1e-7)
-    best_log_probs_active = torch.log(best_probs_active + 1e-9)
-    log_probs_active = torch.log(probs_active + 1e-9)
-    chosen_log_probs = torch.log(chosen_probs + 1e-9)
+    # Prob distributions KL-terms
+    old_log_probs_active = log_normalize(old_probs_active, eps=eps)
+    guide_log_probs_active = log_normalize(guide_probs_active, eps=eps)
+    best_log_probs_active = log_normalize(best_probs_active, eps=eps)
+    log_probs_active = log_normalize(probs_active, eps=eps)
 
     # Entropy
     entropy_probs = probs * valid_mask  # entropy regularization should not include the probabilities which we deem invalid
-    entropy_probs = entropy_probs / entropy_probs.sum(-1, keepdim=True).clamp_min(1e-9)
-    entropy_log_probs = torch.log(entropy_probs + 1e-9)
+    entropy_probs = entropy_probs / entropy_probs.sum(-1, keepdim=True).clamp_min(eps)
+    entropy_log_probs = log_normalize(entropy_probs, eps=eps)
     entropies = -torch.sum(entropy_probs * entropy_log_probs, dim=-1)
     entropies_active = entropies[active_mask[:, :-1]]
+
+    # Chosen probs used in actor loss
+    active_guess_mask = guess_mask[active_mask[:, :-1]]
+    chosen_log_probs = log_probs_active[active_guess_mask]
+    chosen_old_log_probs = old_log_probs_active[active_guess_mask]
 
     # Critic loss before advantage normalization
     critic_losses = advantages_active.pow(2)
@@ -74,17 +91,33 @@ def calculate_loss(
     # Normalize advantages
     if norm:
         mean_adv = advantages_active.mean()
-        std_adv = advantages_active.std() + 1e-9
+        std_adv = advantages_active.std() + eps
         advantages_active = (advantages_active - mean_adv) / std_adv
-    # advantages_active = torch.tanh(advantages_active / 5.0) * 5.0  # Test if this helps with stability
 
     # Compute losses
+    ## Plain policy-gradient
     actor_loss = -(advantages_active * chosen_log_probs).mean()
+    ## PPO-clip variant
+    # ratio = torch.exp(chosen_log_probs - chosen_old_log_probs)   # π_new / π_old
+    # clip_eps = 0.5
+    # surr1 = ratio * advantages_active
+    # surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages_active
+    # actor_loss = -torch.min(surr1, surr2).mean()
+
     critic_loss = critic_losses.mean()
     entropy_loss = -entropies_active.mean()
+    # Normal KL-Div
     kl_reg_loss = F.kl_div(old_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
     kl_guide_loss = F.kl_div(guide_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
     kl_best_loss = F.kl_div(best_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
+    # Try soft-clamping
+    # kl_reg_loss = softclamp_kl(old_log_probs_active, log_probs_active)
+    # kl_guide_loss = softclamp_kl(guide_log_probs_active, log_probs_active)
+    # kl_best_loss = softclamp_kl(best_log_probs_active, log_probs_active)
+    # Try other losses
+    # kl_reg_loss = F.mse_loss(old_probs_active, probs_active, reduction='mean')
+    # kl_guide_loss = F.mse_loss(guide_probs_active, probs_active, reduction='none').mean()
+    # kl_best_loss = F.mse_loss(best_probs_active, probs_active, reduction='none').mean()
 
     # Combine losses with coefficients
     total_loss = actor_coef * actor_loss + critic_coef * critic_loss + entropy_coef * entropy_loss + kl_reg_coef * kl_reg_loss + kl_guide_coef * kl_guide_loss + kl_best_coef * kl_best_loss

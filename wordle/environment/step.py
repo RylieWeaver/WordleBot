@@ -27,13 +27,13 @@ def make_probs(logits, alpha, temperature, valid_mask=None):
 
     # Softmax with temperature
     scaled_logits = logits / temperature
-    probs = F.softmax(scaled_logits, dim=-1)
+    policy_probs = F.softmax(scaled_logits, dim=-1)
 
     # Uniform distribution over valid actions for alpha-mixing
     uniform_probs = valid_mask.float() / valid_mask.sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [batch_size, *, total_vocab_size]
-    final_probs = alpha * uniform_probs + (1 - alpha) * probs
+    final_probs = alpha * uniform_probs + (1 - alpha) * policy_probs
 
-    return final_probs
+    return policy_probs, final_probs
 
 
 def inductive_biases(
@@ -163,24 +163,24 @@ def select_actions(
     # Forward pass to get logits and value
     states = torch.cat([alphabet_states.flatten(start_dim=-2, end_dim=-1), guess_states], dim=-1)  # [batch_size, 26*11 + max_guesses]
     logits, _ = actor_critic_net(states)  # shape: logits=[batch_size, total_vocab_size], value=[batch_size, 1]
-    policy_probs = make_probs(logits, alpha, temperature, valid_action_mask)  # [batch_size, total_vocab_size]
+    policy_probs, final_probs = make_probs(logits, alpha, temperature, valid_action_mask)  # [batch_size, total_vocab_size]
 
-    # Apply inductive bias masking
+    # Apply inductive bias masking and normalize
     policy_probs_masked = (policy_probs.clone() * valid_action_mask.float())  # [batch_size, total_vocab_size]
-
-    # Normalize the probabilities after masking
+    final_probs_masked = (final_probs.clone() * valid_action_mask.float())  # [batch_size, total_vocab_size]
     policy_probs_masked = normalize_probs(policy_probs_masked, valid_action_mask)
+    final_probs_masked = normalize_probs(final_probs_masked, valid_action_mask)
 
     # Select one action based on the updated average values
     if not argmax:
-        *dims, total_vocab_size = policy_probs_masked.shape
-        guess_idx = torch.multinomial(policy_probs_masked.reshape(-1, total_vocab_size) , 1).squeeze(-1)  # [*dims]
+        *dims, total_vocab_size = final_probs_masked.shape
+        guess_idx = torch.multinomial(final_probs_masked.reshape(-1, total_vocab_size) , 1).squeeze(-1)  # [*dims]
         guess_idx = guess_idx.reshape(*dims)  # [batch_size, *]
     else:
         _, guess_idx = torch.topk(policy_probs_masked, k=1, dim=-1) # [batch_size, *, 1]
         guess_idx = guess_idx.squeeze(-1)  # [batch_size, *]
 
-    # Peek the guess word guess word with a probability
+    # Peek the target word with a probability if on the last guess
     if peek > 0.0 and last_guess:
         peek_mask = (torch.rand(batch_size, device=device) < peek)  # apply peek to whole batch element to not add variance to search
         expanded_dim = (batch_size, *([1] * len(extra_dims)))  # get shape to broadcast over

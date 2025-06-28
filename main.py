@@ -6,7 +6,7 @@ import torch
 
 # Wordle
 from wordle.data import get_vocab, words_to_tensor, tensor_to_words
-from wordle.model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet
+from wordle.model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet, TransformerGuessStateNet, DotGuessStateNet
 from wordle.train import train
 from wordle.utils import load_config
 
@@ -26,7 +26,24 @@ def main():
     # Config
     checkpoint_config = config
     total_vocab_tensor = words_to_tensor(total_vocab).to(device)  # [total_vocab_size, 5]
-    actor_critic_net = GuessStateNet(
+    # actor_critic_net = GuessStateNet(
+    #     input_dim=checkpoint_config["Data"]["state_size"],  # 292 = 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
+    #     hidden_dim=checkpoint_config["Model"]["hidden_dim"],
+    #     total_vocab_tensor=total_vocab_tensor,
+    #     layers=checkpoint_config["Model"]["layers"],
+    #     dropout=checkpoint_config["Model"]["dropout"],
+    #     device=device
+    # ).to(device)
+    # actor_critic_net = TransformerGuessStateNet(
+    #     input_dim=11,
+    #     hidden_dim=32,
+    #     total_vocab_tensor=total_vocab_tensor,
+    #     layers=2,
+    #     num_heads=4,
+    #     dropout=checkpoint_config["Model"]["dropout"],
+    #     device=device
+    # ).to(device)
+    actor_critic_net = DotGuessStateNet(
         input_dim=checkpoint_config["Data"]["state_size"],  # 292 = 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
         hidden_dim=checkpoint_config["Model"]["hidden_dim"],
         total_vocab_tensor=total_vocab_tensor,

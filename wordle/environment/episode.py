@@ -275,9 +275,9 @@ def process_episodes(
         advantages_batch[:, t] = gae
 
     # Calculate the final probs
-    probs_batch = make_probs(logits_batch, alpha, temperature, valid_mask_batch)
+    policy_probs_batch, final_probs_batch = make_probs(logits_batch, alpha, temperature, valid_mask_batch)
 
     # Compute the episodes with correct guesses via the mask
     correct = ((active_mask_batch[:, :-1] == 0).any(dim=-1))  # the last column should be zeros anyways
 
-    return advantages_batch, probs_batch, correct
+    return advantages_batch, policy_probs_batch, correct

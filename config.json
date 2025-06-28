@@ -2,19 +2,18 @@
     "Data": {
         "state_size": 292,
         "max_guesses": 6,
-        "guess_vocab_size": 500,
-        "target_vocab_size": 100
+        "target_vocab_size": 500
     },
     "Model": {
-        "hidden_dim": 1024,
-        "layers": 3,
+        "hidden_dim": 512,
+        "layers": 2,
         "dropout": 0.1,
         "device": "mps"
     },
     "Training": {
         "epochs": 1000000,
         "lr": 1e-4,
-        "batch_size": 100,
+        "batch_size": 500,
         "minibatch_size": null,
         "search": {
             "k": 5,
@@ -31,15 +30,15 @@
             "actor_coef": 1.0,
             "critic_coef": 1.0,
             "entropy_coef": 0.05,
-            "kl_reg_coef": 0.5,
-            "kl_guide_coef": 0.5,
-            "kl_best_coef": 1.0
+            "kl_reg_coef": 0.25,
+            "kl_guide_coef": 0.05,
+            "kl_best_coef": 0.05
         },
         "peek": 0.1,
         "scheduling": {
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,
-            "global_lr_decay_factor": 0.99,
+            "global_lr_decay_factor": 0.995,
             "greedify_patience": 3,
             "early_stopping_patience": 1000
         },
@@ -49,11 +48,11 @@
         }
     },
     "Exploration": {
-        "alpha": 1.0,
+        "alpha": 0.99,
         "min_alpha": 0.0,
-        "alpha_step": 0.01,
+        "alpha_step": 0.05,
         "temperature": 1.0,
         "min_temperature": 0.001,
-        "temperature_decay_factor": 0.99
+        "temperature_decay_factor": 0.90
     }
 }

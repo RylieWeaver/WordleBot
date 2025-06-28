@@ -2,6 +2,8 @@
 import os
 import copy
 import time
+from collections import deque
+
 
 # Torch
 import torch
@@ -96,6 +98,7 @@ def train(
 
     replay=True
     optimizer = optim.AdamW(actor_critic_net.parameters(), lr=lr, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=10)
 
     min_lr = lr * min_lr_factor
 
@@ -106,12 +109,15 @@ def train(
     no_improve_count = 0
 
     best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
+    window_size = 5
+    policy_buffer = deque(maxlen=window_size)
+    policy_buffer.append(copy.deepcopy(actor_critic_net).cpu())
     for epoch in range(epochs):
         # ------------------- INSTANTIATE NETWORKS -------------------
-        old_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)  # freeze old policy each epoch
         actor_critic_net.train()
 
         for batch_idx, target_idx in enumerate(train_loader):
+            old_policy_net = policy_buffer[0].to(device).eval()  # Get the policy from window_size-1 steps ago or KL-reg
             if replay:
                 replay_idx = torch.tensor(replay_loader.sample())
                 selected_idx = torch.cat((target_idx, replay_idx), dim=0)  # [batch_size + replay_ratio * batch_size]
@@ -184,7 +190,6 @@ def train(
                         # -------------- Compute Loss --------------
                         # The KL divergence should be 0 on the first batch in an epoch, but it is often not 
                         # because of a non-deterministic forward (e.g. dropout). Setting to 0 removes some noise
-                        passed_kl_reg_coef = kl_reg_coef if (batch_idx!=0) else 0.0
                         (loss_mb, actor_loss_mb, critic_loss_mb, entropy_loss_mb, kl_reg_loss_mb, kl_guide_loss_mb, kl_best_loss_mb) = calculate_loss(
                             advantages_minibatch,
                             old_probs_minibatch,
@@ -194,7 +199,7 @@ def train(
                             actor_coef,
                             critic_coef,
                             entropy_coef,
-                            passed_kl_reg_coef,
+                            kl_reg_coef,
                             kl_guide_coef,
                             kl_best_coef,
                             guess_mask_minibatch,
@@ -220,7 +225,7 @@ def train(
                                 actor_loss_mb, actor_coef,
                                 critic_loss_mb, critic_coef,
                                 entropy_loss_mb, entropy_coef,
-                                kl_reg_loss_mb, passed_kl_reg_coef,
+                                kl_reg_loss_mb, kl_reg_coef,
                                 kl_guide_loss_mb, kl_guide_coef,
                                 kl_best_loss_mb, kl_best_coef,
                             )
@@ -233,9 +238,14 @@ def train(
                     # ---------------- Concatenate correct for entire batch ----------------
                     correct_batch = torch.cat(correct_batch, dim=0)
 
+                    # ---------------- Update Buffer w/ Policy ----------------
+                    policy_buffer.append(copy.deepcopy(actor_critic_net).cpu())
+
                     # -------------- Backprop --------------
                     torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=3.0)
                     optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    scheduler.step()
 
                     # ---------------- Update Replay ----------------
                     replay_loader.update(selected_idx, selected_idx[~correct_batch.cpu()])
@@ -321,6 +331,9 @@ def train(
                 best_test_critic_loss,
             )
             no_improve_count = 0
+            # kl_reg_coef = kl_reg_coef * 0.99
+            # kl_guide_coef = kl_guide_coef * 0.99
+            # kl_best_coef = kl_best_coef * 0.99
 
         # ----------------- Update Statistics ----------------
         best_accuracy = max(test_accuracy, best_accuracy)
