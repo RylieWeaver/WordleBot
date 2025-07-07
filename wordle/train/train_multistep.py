@@ -2,7 +2,7 @@
 import os
 import copy
 import time
-import traceback
+from collections import deque
 
 
 # Torch
@@ -91,12 +91,7 @@ def pretrain(
     best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
     old_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
 
-    reward_blend_factor = 0.9
-    value_blend_factor = 0.1
-
     for epoch in range(epochs):
-        if epoch > warmup_steps:
-            value_blend_factor = 0.9
         # ------------------- INSTANTIATE NETWORKS -------------------
         actor_critic_net.train()
         for batch_idx, target_idx in enumerate(train_loader):
@@ -110,7 +105,7 @@ def pretrain(
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
                 try:
-                    correct_batch = []
+                    alphabet_states_batch, guess_states_batch, expected_values_batch, expected_rewards_batch, rewards_batch, guess_mask_batch, active_mask_batch, valid_mask_batch = [], [], [], [], [], [], [], []
                     for start in range(0, len(selected_idx), mb_size):
                         mb_idx = selected_idx[start:start+mb_size]
                         mb_proportion = (len(mb_idx) / len(selected_idx))
@@ -135,114 +130,135 @@ def pretrain(
                             peek=0.0,
                             argmax=False,
                         )
-                        # ---------------- Process Episodes Old Net ----------------
-                        with torch.no_grad():
-                            _, old_probs_minibatch, _, _ = process_episodes(
-                                old_policy_net,
-                                alphabet_states_minibatch,
-                                guess_states_minibatch,
-                                expected_values_minibatch,
-                                expected_rewards_minibatch,
-                                rewards_minibatch,
-                                active_mask_minibatch,
-                                valid_mask_minibatch,
-                                alpha,
-                                temperature,
-                                gamma,
-                                lam,
-                                reward_blend_factor,
-                                value_blend_factor,
-                            )
+                        # ------------------ Append to batch lists ------------------
+                        alphabet_states_batch.append(alphabet_states_minibatch)
+                        guess_states_batch.append(guess_states_minibatch)
+                        expected_values_batch.append(expected_values_minibatch)
+                        expected_rewards_batch.append(expected_rewards_minibatch)
+                        rewards_batch.append(rewards_minibatch)
+                        guess_mask_batch.append(guess_mask_minibatch)
+                        active_mask_batch.append(active_mask_minibatch)
+                        valid_mask_batch.append(valid_mask_minibatch)
+                    # ------------------ Concatenate batch lists ------------------
+                    alphabet_states_batch = torch.cat(alphabet_states_batch, dim=0)
+                    guess_states_batch = torch.cat(guess_states_batch, dim=0)
+                    expected_values_batch = torch.cat(expected_values_batch, dim=0)
+                    expected_rewards_batch = torch.cat(expected_rewards_batch, dim=0)
+                    rewards_batch = torch.cat(rewards_batch, dim=0)
+                    guess_mask_batch = torch.cat(guess_mask_batch, dim=0)
+                    active_mask_batch = torch.cat(active_mask_batch, dim=0)
+                    valid_mask_batch = torch.cat(valid_mask_batch, dim=0)
 
-                        # ---------------- Process Episodes Best Checkpoint ----------------
-                        with torch.no_grad():
-                            _, best_probs_minibatch, _, _ = process_episodes(
-                                best_policy_net,
-                                alphabet_states_minibatch,
-                                guess_states_minibatch,
-                                expected_values_minibatch,
-                                expected_rewards_minibatch,
-                                rewards_minibatch,
-                                active_mask_minibatch,
-                                valid_mask_minibatch,
-                                alpha,
-                                temperature,
-                                gamma,
-                                lam,
-                                reward_blend_factor,
-                                value_blend_factor,
-                            )
 
-                        # ---------------- Process Episodes Actual Net ----------------
-                        actor_critic_net.train()
-                        advantages_minibatch, probs_minibatch, guide_probs_minibatch, correct_minibatch = process_episodes(
-                            actor_critic_net,
-                            alphabet_states_minibatch,
-                            guess_states_minibatch,
-                            expected_values_minibatch,
-                            expected_rewards_minibatch,
-                            rewards_minibatch,
-                            active_mask_minibatch,
-                            valid_mask_minibatch,
-                            alpha,
-                            temperature,
-                            gamma,
-                            lam,
-                            reward_blend_factor,
-                            value_blend_factor,
-                        )
+                    for i in range(10):
+                        # ------------------ Process Minibatches ------------------
+                        correct_batch = []
+                        for start in range(0, len(selected_idx), mb_size):
+                            mb_idx = selected_idx[start:start+mb_size]
+                            mb_proportion = (len(mb_idx) / len(selected_idx))
+                            target_tensor = target_vocab_tensor[mb_idx]
+                            # ---------------- Process Episodes Old Net ----------------
+                            with torch.no_grad():
+                                _, old_probs_minibatch, _, _ = process_episodes(
+                                    old_policy_net,
+                                    alphabet_states_minibatch,
+                                    guess_states_minibatch,
+                                    expected_values_minibatch,
+                                    expected_rewards_minibatch,
+                                    rewards_minibatch,
+                                    active_mask_minibatch,
+                                    valid_mask_minibatch,
+                                    alpha,
+                                    temperature,
+                                    gamma,
+                                    lam,
+                                )
 
-                        # -------------- Compute Loss --------------
-                        # The KL divergence should be 0 on the first batch in an epoch, but it is often not 
-                        # because of a non-deterministic forward (e.g. dropout). Setting to 0 removes some noise
-                        (loss_mb, actor_loss_mb, critic_loss_mb, entropy_loss_mb, kl_reg_loss_mb, kl_guide_loss_mb, kl_best_loss_mb) = calculate_loss(
-                            advantages_minibatch,
-                            old_probs_minibatch,
-                            guide_probs_minibatch,
-                            best_probs_minibatch,
-                            probs_minibatch,
-                            actor_coef,
-                            critic_coef,
-                            entropy_coef,
-                            kl_reg_coef,
-                            kl_guide_coef,
-                            kl_best_coef,
-                            guess_mask_minibatch,
-                            active_mask_minibatch,
-                            valid_mask_minibatch,
-                            norm=True,
-                            pretrain=True
-                        )
+                            # ---------------- Process Episodes Best Checkpoint ----------------
+                            with torch.no_grad():
+                                _, best_probs_minibatch, _, _ = process_episodes(
+                                    best_policy_net,
+                                    alphabet_states_minibatch,
+                                    guess_states_minibatch,
+                                    expected_values_minibatch,
+                                    expected_rewards_minibatch,
+                                    rewards_minibatch,
+                                    active_mask_minibatch,
+                                    valid_mask_minibatch,
+                                    alpha,
+                                    temperature,
+                                    gamma,
+                                    lam,
+                                )
 
-                        # ------------------ Normalize Minibatch Losses ------------------
-                        # Total loss should be invariant to minibatch size
-                        loss_mb = loss_mb / mb_proportion
-                        actor_loss_mb = actor_loss_mb / mb_proportion
-                        critic_loss_mb = critic_loss_mb / mb_proportion
-                        entropy_loss_mb = entropy_loss_mb / mb_proportion
-                        kl_reg_loss_mb = kl_reg_loss_mb / mb_proportion
-                        kl_guide_loss_mb = kl_guide_loss_mb / mb_proportion
-                        kl_best_loss_mb = kl_best_loss_mb / mb_proportion
-
-                        # ---------------- Measure Grad Norms ----------------
-                        if (epoch%25 == 0) and (batch_idx == len(train_loader)-1) and (mb_idx[-1] == selected_idx[-1]):  # Measure grad norms on the last minibatch of the last batch of every epochs
-                            actor_grad_norm, critic_grad_norm, entropy_grad_norm, kl_reg_grad_norm, kl_guide_grad_norm, kl_best_grad_norm = measure_grad_norms(
+                            # ---------------- Process Episodes Actual Net ----------------
+                            actor_critic_net.train()
+                            advantages_minibatch, probs_minibatch, guide_probs_minibatch, correct_minibatch = process_episodes(
                                 actor_critic_net,
-                                actor_loss_mb, actor_coef,
-                                critic_loss_mb, critic_coef,
-                                entropy_loss_mb, entropy_coef,
-                                kl_reg_loss_mb, kl_reg_coef,
-                                kl_guide_loss_mb, kl_guide_coef,
-                                kl_best_loss_mb, kl_best_coef,
+                                alphabet_states_minibatch,
+                                guess_states_minibatch,
+                                expected_values_minibatch,
+                                expected_rewards_minibatch,
+                                rewards_minibatch,
+                                active_mask_minibatch,
+                                valid_mask_minibatch,
+                                alpha,
+                                temperature,
+                                gamma,
+                                lam,
                             )
-                            print(f"Actor grad norm: {actor_grad_norm:.4f}, Critic grad norm: {critic_grad_norm:.4f}, Entropy grad norm: {entropy_grad_norm:.4f}, KL-Reg grad norm: {kl_reg_grad_norm:.4f}, KL-Guide grad norm: {kl_guide_grad_norm:.4f}, KL-Best grad norm: {kl_best_grad_norm:.4f}")
 
-                        # ------------------ Accumulate Minibatch Results ------------------
-                        loss_mb.backward()
-                        correct_batch.append(correct_minibatch)
+                            # -------------- Compute Loss --------------
+                            # The KL divergence should be 0 on the first batch in an epoch, but it is often not 
+                            # because of a non-deterministic forward (e.g. dropout). Setting to 0 removes some noise
+                            (loss_mb, actor_loss_mb, critic_loss_mb, entropy_loss_mb, kl_reg_loss_mb, kl_guide_loss_mb, kl_best_loss_mb) = calculate_loss(
+                                advantages_minibatch,
+                                old_probs_minibatch,
+                                guide_probs_minibatch,
+                                best_probs_minibatch,
+                                probs_minibatch,
+                                actor_coef,
+                                critic_coef,
+                                entropy_coef,
+                                kl_reg_coef,
+                                kl_guide_coef,
+                                kl_best_coef,
+                                guess_mask_minibatch,
+                                active_mask_minibatch,
+                                valid_mask_minibatch,
+                                norm=True,
+                                pretrain=True
+                            )
 
-                        # ---------------- Concatenate correct for entire batch ----------------
-                        correct_batch = torch.cat(correct_batch, dim=0)
+                            # ------------------ Normalize Minibatch Losses ------------------
+                            # Total loss should be invariant to minibatch size
+                            loss_mb = loss_mb / mb_proportion
+                            actor_loss_mb = actor_loss_mb / mb_proportion
+                            critic_loss_mb = critic_loss_mb / mb_proportion
+                            entropy_loss_mb = entropy_loss_mb / mb_proportion
+                            kl_reg_loss_mb = kl_reg_loss_mb / mb_proportion
+                            kl_guide_loss_mb = kl_guide_loss_mb / mb_proportion
+                            kl_best_loss_mb = kl_best_loss_mb / mb_proportion
+
+                            # ---------------- Measure Grad Norms ----------------
+                            if (epoch%25 == 0) and (batch_idx == len(train_loader)-1) and (mb_idx[-1] == selected_idx[-1]):  # Measure grad norms on the last minibatch of the last batch of every epochs
+                                actor_grad_norm, critic_grad_norm, entropy_grad_norm, kl_reg_grad_norm, kl_guide_grad_norm, kl_best_grad_norm = measure_grad_norms(
+                                    actor_critic_net,
+                                    actor_loss_mb, actor_coef,
+                                    critic_loss_mb, critic_coef,
+                                    entropy_loss_mb, entropy_coef,
+                                    kl_reg_loss_mb, kl_reg_coef,
+                                    kl_guide_loss_mb, kl_guide_coef,
+                                    kl_best_loss_mb, kl_best_coef,
+                                )
+                                print(f"Actor grad norm: {actor_grad_norm:.4f}, Critic grad norm: {critic_grad_norm:.4f}, Entropy grad norm: {entropy_grad_norm:.4f}, KL-Reg grad norm: {kl_reg_grad_norm:.4f}, KL-Guide grad norm: {kl_guide_grad_norm:.4f}, KL-Best grad norm: {kl_best_grad_norm:.4f}")
+
+                            # ------------------ Accumulate Minibatch Results ------------------
+                            loss_mb.backward()
+                            correct_batch.append(correct_minibatch)
+
+                            # ---------------- Concatenate correct for entire batch ----------------
+                            correct_batch = torch.cat(correct_batch, dim=0)
 
                         # -------------- Backprop --------------
                         torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=3.0)
@@ -256,13 +272,9 @@ def pretrain(
                     break
                 # ---------------- Print exception errors and continue ----------------
                 except RuntimeError as e:
-                    if attempt < max_attempts:
-                        print(f"Retrying batch {batch_idx} in testing due to error:\n")
-                        traceback.print_exc()
-                    else:
-                        print(f"Failed to process batch {batch_idx} after {max_attempts} attempts due to error:\n.")
-                        traceback.print_exc()
-                        continue   # out of retries, continue
+                    print(f"Skipping batch {batch_idx} in epoch {epoch} due to error:\n{e}")
+                    if attempt == max_attempts:
+                        continue   # out of retries, raise error
                     time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
@@ -285,8 +297,6 @@ def pretrain(
             gamma,
             lam,
             m,
-            reward_blend_factor,
-            value_blend_factor,
             actor_coef,
             0.0,  # No critic loss in evaluation
             0.0,  # No entropy loss in evaluation
@@ -432,9 +442,6 @@ def posttrain(
     for p in old_policy_net.parameters():
         p.requires_grad = False
 
-    reward_blend_factor = 0.9
-    value_blend_factor = 0.1
-
     for epoch in range(epochs):
         # ------------------- INSTANTIATE NETWORKS -------------------
         actor_critic_net.train()
@@ -556,8 +563,6 @@ def posttrain(
                                 temperature,
                                 gamma,
                                 lam,
-                                reward_blend_factor,
-                                value_blend_factor,
                             )
 
                         # ---------------- Process Episodes Best Checkpoint ----------------
@@ -575,8 +580,6 @@ def posttrain(
                                 temperature,
                                 gamma,
                                 lam,
-                                reward_blend_factor,
-                                value_blend_factor,
                             )
 
                         # ---------------- Process Episodes Actual Net ----------------
@@ -594,8 +597,6 @@ def posttrain(
                             temperature,
                             gamma,
                             lam,
-                            reward_blend_factor,
-                            value_blend_factor,
                         )
 
                         # -------------- Compute Loss --------------
@@ -663,13 +664,9 @@ def posttrain(
                     break
                 # ---------------- Print exception errors and continue ----------------
                 except RuntimeError as e:
-                    if attempt < max_attempts:
-                        print(f"Retrying batch {batch_idx} in testing due to error:\n")
-                        traceback.print_exc()
-                    else:
-                        print(f"Failed to process batch {batch_idx} after {max_attempts} attempts due to error:\n.")
-                        traceback.print_exc()
-                        continue   # out of retries, continue
+                    print(f"Skipping batch {batch_idx} in epoch {epoch} due to error:\n{e}")
+                    if attempt == max_attempts:
+                        continue   # out of retries, raise error
                     time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
@@ -692,8 +689,6 @@ def posttrain(
             gamma,
             lam,
             m,
-            reward_blend_factor,
-            value_blend_factor,
             actor_coef,
             0.0,  # No critic loss in evaluation
             0.0,  # No entropy loss in evaluation
@@ -798,8 +793,6 @@ def test(
     gamma,
     lam,
     m,
-    reward_blend_factor,
-    value_blend_factor,
     actor_coef,
     critic_coef,
     entropy_coef,
@@ -869,8 +862,6 @@ def test(
                             temperature,
                             gamma,
                             lam,
-                            reward_blend_factor,
-                            value_blend_factor,
                         )
 
                         # ---------------- Process Episodes Best Checkpoint ----------------
@@ -887,8 +878,6 @@ def test(
                             temperature,
                             gamma,
                             lam,
-                            reward_blend_factor,
-                            value_blend_factor,
                         )
 
                         # ---------------- Process Episodes ----------------
@@ -905,8 +894,6 @@ def test(
                             temperature,
                             gamma,
                             lam,
-                            reward_blend_factor,
-                            value_blend_factor,
                         )
 
                         # -------------- Compute Loss --------------
@@ -945,11 +932,9 @@ def test(
                 # ---------------- Print exception errors and continue ----------------
                 except RuntimeError as e:
                     if attempt < max_attempts:
-                        print(f"Retrying batch {batch_idx} in testing due to error:\n")
-                        traceback.print_exc()
+                        print(f"Retrying batch {batch_idx} in testing due to error:\n{e}")
                     else:
-                        print(f"Failed to process batch {batch_idx} after {max_attempts} attempts due to error:\n.")
-                        traceback.print_exc()
+                        print(f"Failed to process batch {batch_idx} after {max_attempts} attempts.")
                         continue   # out of retries, continue
                     time.sleep(3)   # wait 3 seconds before next try
 

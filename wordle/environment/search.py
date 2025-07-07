@@ -252,4 +252,4 @@ def select_actions_search(
     guess_tensor = total_vocab_tensor[guess_idx]  # [batch_size, 5]
     guess_idx_onehot = F.one_hot(guess_idx, num_classes=logits.shape[-1]).float()  # [batch_size, total_vocab_size]
 
-    return policy_probs, policy_probs_masked, final_probs, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor
+    return policy_probs, final_probs, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor

@@ -192,7 +192,7 @@ def select_actions(
     guess_tensor = total_vocab_tensor[guess_idx]  # [batch_size, *, 5]
     guess_idx_onehot = F.one_hot(guess_idx, num_classes=policy_probs_masked.shape[-1]).bool()  # [batch_size, total_vocab_size]
 
-    return policy_probs, policy_probs_masked, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor
+    return policy_probs, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor
 
 
 def simulate_actions(
@@ -213,7 +213,7 @@ def simulate_actions(
     - guess_states: [batch_size, *, max_guesses]
     - alphabet_entropy: [batch_size, *]
     - given_target_mask: [batch_size, *, target_vocab_size]
-    - target_vocab_states: [target_vocab_size, *, 26, 11]
+    - target_vocab_states: [*, target_vocab_size, 26, 11]
     - guess_tensor: [batch_size, *, 5]
     - target_tensor: [batch_size, *, 5]
 

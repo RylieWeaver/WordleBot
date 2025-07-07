@@ -9,12 +9,10 @@ def log_normalize(probs, eps=1e-12, clamp=1e-12):
     return torch.log(probs)
 
 
-def softclamp_kl(log_p, log_q, max_kl=0.1):
-    kl_div = F.kl_div(log_p, log_q, reduction='none', log_target=True)
-    T = 4.0 / max_kl  # Temperature sets slope=1 at x=0
-    kl_div = ((max_kl * (1 / (1 + torch.exp(-T * kl_div)))) - 0.5).clamp_min(0.0)  # Smooth clamp and remove the 0.5 offset
-    kl_div = kl_div.sum(dim=-1)  # Sum over vocabulary dimension
-    return kl_div.mean()  # Return mean KL divergence over batch if needed
+# Freeze gradient when probs pass a threshold (to avoid collpase in pretraining)
+def clip_grad(probs, max=0.1, min=0.0):
+    keep = ((probs >= min) & (probs <= max)).float()
+    return probs * keep + (1 - keep) * probs.detach()
 
 
 def calculate_loss(
@@ -33,6 +31,7 @@ def calculate_loss(
     active_mask,
     valid_mask,
     norm=True,
+    pretrain=False
 ):
     """
     Calculate the loss components and total weighted loss:
@@ -59,6 +58,10 @@ def calculate_loss(
     """
     # Setup
     eps = 1e-10  # Small value to avoid instabilities
+
+    # Freeze gradient for probs above treshold to avoid collapse in pretraining
+    if pretrain:
+        probs = clip_grad(probs, max=0.1, min=0.0)
 
     # Mask prob distributions
     advantages_active = advantages[active_mask[:, :-1]]
@@ -97,11 +100,12 @@ def calculate_loss(
     # Compute losses
     ## Plain policy-gradient
     actor_loss = -(advantages_active * chosen_log_probs).mean()
-    ## PPO-clip variant
-    # ratio = torch.exp(chosen_log_probs - chosen_old_log_probs)   # π_new / π_old
-    # clip_eps = 0.5
+    ## Policy Gradient KL-Region Implementation
+    # clip_eps = 0.2
+    # ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
+    # clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
     # surr1 = ratio * advantages_active
-    # surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * advantages_active
+    # surr2 = clipped * advantages_active
     # actor_loss = -torch.min(surr1, surr2).mean()
 
     critic_loss = critic_losses.mean()
@@ -110,14 +114,6 @@ def calculate_loss(
     kl_reg_loss = F.kl_div(old_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
     kl_guide_loss = F.kl_div(guide_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
     kl_best_loss = F.kl_div(best_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
-    # Try soft-clamping
-    # kl_reg_loss = softclamp_kl(old_log_probs_active, log_probs_active)
-    # kl_guide_loss = softclamp_kl(guide_log_probs_active, log_probs_active)
-    # kl_best_loss = softclamp_kl(best_log_probs_active, log_probs_active)
-    # Try other losses
-    # kl_reg_loss = F.mse_loss(old_probs_active, probs_active, reduction='mean')
-    # kl_guide_loss = F.mse_loss(guide_probs_active, probs_active, reduction='none').mean()
-    # kl_best_loss = F.mse_loss(best_probs_active, probs_active, reduction='none').mean()
 
     # Combine losses with coefficients
     total_loss = actor_coef * actor_loss + critic_coef * critic_loss + entropy_coef * entropy_loss + kl_reg_coef * kl_reg_loss + kl_guide_coef * kl_guide_loss + kl_best_coef * kl_best_loss

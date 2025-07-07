@@ -1,12 +1,9 @@
 {
     "Data": {
         "state_size": 292,
-        "max_guesses": 6,
-        "target_vocab_size": 500
+        "max_guesses": 6
     },
     "Model": {
-        "hidden_dim": 1024,
-        "layers": 3,
         "dropout": 0.1,
         "device": "mps"
     },
@@ -23,15 +20,15 @@
         },
         "rewards": {
             "gamma": 0.99,
-            "lam": 0.1,
-            "m": 3
+            "lam": 0.5,
+            "m": 5
         },
         "loss": {
             "actor_coef": 1.0,
             "critic_coef": 5.0,
             "entropy_coef": 0.05,
-            "kl_reg_coef": 0.50,
-            "kl_guide_coef": 0.25,
+            "kl_reg_coef": 1.00,
+            "kl_guide_coef": 1.00,
             "kl_best_coef": 0.10
         },
         "peek": 0.1,
@@ -39,20 +36,23 @@
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,
             "global_lr_decay_factor": 0.995,
-            "greedify_patience": 5,
-            "early_stopping_patience": 1000
+            "greedify_patience": 3,
+            "window_size": 10,
+            "warmup_steps": 100,
+            "early_stopping_patience": 200,
+            "stopping_patience": 1000
         },
         "log": {
-            "enabled": false,
-            "dir": "log_dir"
+            "enabled": true,
+            "dir": "posttrain_log"
         }
     },
     "Exploration": {
-        "alpha": 1.00,
+        "alpha": 0.00,
         "min_alpha": 0.0,
-        "alpha_step": 0.05,
-        "temperature": 1.0,
+        "alpha_step": 0.01,
+        "temperature": 3.0,
         "min_temperature": 0.001,
-        "temperature_decay_factor": 0.90
+        "temperature_decay_factor": 0.95
     }
 }

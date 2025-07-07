@@ -7,27 +7,22 @@ import torch
 # Wordle
 from wordle.data import get_vocab, words_to_tensor, tensor_to_words
 from wordle.model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet, TransformerGuessStateNet, DotGuessStateNet
-from wordle.train import train
+from wordle.train import posttrain
 from wordle.utils import load_config
 
 
 
 def main():
     # Setup
-    config = load_config('config.json')
+    config = load_config('posttrain_config.json')
+    checkpoint_config = load_config('pretrain_log/config.json')
     device = config["Model"]["device"]
 
     # Data
-    total_vocab, target_vocab = get_vocab(
-        guess_vocab_size=config["Data"]["guess_vocab_size"],
-        target_vocab_size=config["Data"]["target_vocab_size"]
-    )
-    # Read a deterministic np-concatenated subset of the vocab
+    with open('total_vocab_500.txt', 'r') as f:
+        total_vocab = [line.strip() for line in f]
     with open('target_vocab_500.txt', 'r') as f:
         target_vocab = [line.strip() for line in f]
-
-    # Config
-    checkpoint_config = config
 
     # Model
     total_vocab_tensor = words_to_tensor(total_vocab).to(device)  # [total_vocab_size, 5]
@@ -36,13 +31,13 @@ def main():
         hidden_dim=checkpoint_config["Model"]["hidden_dim"],
         total_vocab_tensor=total_vocab_tensor,
         layers=checkpoint_config["Model"]["layers"],
-        dropout=checkpoint_config["Model"]["dropout"],
+        dropout=config["Model"]["dropout"],
         device=device
     ).to(device)
-    actor_critic_net.load_state_dict(torch.load('pretrained_net_500.pth', map_location=device))
+    actor_critic_net.load_state_dict(torch.load('pretrain_log/best_model.pth', map_location=device, weights_only=True))
 
     # Train the network
-    train(
+    posttrain(
         actor_critic_net,
         total_vocab,
         target_vocab,
@@ -77,7 +72,10 @@ def main():
         config["Training"]["scheduling"]["global_lr_decay_factor"],
         config["Training"]["scheduling"]["lr_decay_factor"],
         config["Training"]["scheduling"]["greedify_patience"],
+        config["Training"]["scheduling"]["window_size"],
+        config["Training"]["scheduling"]["warmup_steps"],
         config["Training"]["scheduling"]["early_stopping_patience"],
+        config["Training"]["scheduling"]["stopping_patience"],
         config
     )
 
