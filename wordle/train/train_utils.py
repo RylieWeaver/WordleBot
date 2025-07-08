@@ -13,8 +13,8 @@ def log_normalize(probs, eps=1e-12, clamp=1e-12):
 def clip_grad(probs, valid_mask, max=0.1, min=0.0):
     # Keep probabilities within the range [min, max] or if they are less than 1/valid
     # Keeping probs <= 1/valid allows the model to optimize the guide loss even if the probabilities are outside the threshold
-    valid = probs.sum(dim=-1)
-    keep = (((probs >= min) & (probs <= max)) | (probs <= 1/valid)).float()
+    valid = valid_mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    keep = (((probs >= min) & ((probs <= max) | (probs <= 1/valid))).float())
     return probs * keep + (1 - keep) * probs.detach()
 
 
