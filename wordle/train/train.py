@@ -447,7 +447,6 @@ def posttrain(
 
             if update_count%window_size == 0:
                 old_policy_net.load_state_dict(actor_critic_net.state_dict())
-            proportion = 1 - (update_count % window_size) / window_size
 
             # ------------------ Wrap batches in a try-except to handle lightning strikes ------------------
             max_attempts = 3
@@ -460,68 +459,9 @@ def posttrain(
                         mb_idx = selected_idx[start:start+mb_size]
                         mb_proportion = (len(mb_idx) / len(selected_idx))
                         target_tensor = target_vocab_tensor[mb_idx]
-                        # # -------- Anneal episode collection between old/current policy --------
-                        # slice = int(len(target_tensor) * proportion)
-                        # slice = max(1, min(slice, len(target_tensor) - 1))
-                        # target_tensor1 = target_tensor[:slice]
-                        # target_tensor2 = target_tensor[slice:]
-                        # mb_idx1 = mb_idx[:slice]
-                        # mb_idx2 = mb_idx[slice:]
-                        # # -------- Collect episodes using the old policy --------
-                        # (alphabet_states_minibatch1, guess_states_minibatch1, _, expected_values_minibatch1, expected_rewards_minibatch1, rewards_minibatch1, guess_mask_minibatch1, active_mask_minibatch1, valid_mask_minibatch1) = collect_episodes(
-                        #     old_policy_net,
-                        #     total_vocab,
-                        #     target_vocab,
-                        #     total_vocab_tensor,
-                        #     target_vocab_tensor,
-                        #     total_vocab_states,
-                        #     target_vocab_states,
-                        #     mb_idx1,
-                        #     target_tensor1,
-                        #     alpha,
-                        #     temperature,
-                        #     max_guesses,
-                        #     k=k,
-                        #     r=r,
-                        #     m=m,
-                        #     search=train_search,
-                        #     peek=peek,
-                        #     argmax=False,
-                        # )
-                        # # -------- Collect episodes using the current policy --------
-                        # (alphabet_states_minibatch2, guess_states_minibatch2, _, expected_values_minibatch2, expected_rewards_minibatch2, rewards_minibatch2, guess_mask_minibatch2, active_mask_minibatch2, valid_mask_minibatch2) = collect_episodes(
-                        #     actor_critic_net,
-                        #     total_vocab,
-                        #     target_vocab,
-                        #     total_vocab_tensor,
-                        #     target_vocab_tensor,
-                        #     total_vocab_states,
-                        #     target_vocab_states,
-                        #     mb_idx2,
-                        #     target_tensor2,
-                        #     alpha,
-                        #     temperature,
-                        #     max_guesses,
-                        #     k=k,
-                        #     r=r,
-                        #     m=m,
-                        #     search=train_search,
-                        #     peek=peek,
-                        #     argmax=False,
-                        # )
-                        # # ---------------- Concatenate the two halves of the minibatch ----------------
-                        # alphabet_states_minibatch = torch.cat((alphabet_states_minibatch1, alphabet_states_minibatch2), dim=0)
-                        # guess_states_minibatch = torch.cat((guess_states_minibatch1, guess_states_minibatch2), dim=0)
-                        # expected_values_minibatch = torch.cat((expected_values_minibatch1, expected_values_minibatch2), dim=0)
-                        # expected_rewards_minibatch = torch.cat((expected_rewards_minibatch1, expected_rewards_minibatch2), dim=0)
-                        # rewards_minibatch = torch.cat((rewards_minibatch1, rewards_minibatch2), dim=0)
-                        # guess_mask_minibatch = torch.cat((guess_mask_minibatch1, guess_mask_minibatch2), dim=0)
-                        # active_mask_minibatch = torch.cat((active_mask_minibatch1, active_mask_minibatch2), dim=0)
-                        # valid_mask_minibatch = torch.cat((valid_mask_minibatch1, valid_mask_minibatch2), dim=0)
-
                         # -------- Collect episodes using the old policy --------
                         (alphabet_states_minibatch, guess_states_minibatch, _, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
-                            actor_critic_net,
+                            old_policy_net,
                             total_vocab,
                             target_vocab,
                             total_vocab_tensor,

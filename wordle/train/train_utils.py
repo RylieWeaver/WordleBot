@@ -9,9 +9,12 @@ def log_normalize(probs, eps=1e-12, clamp=1e-12):
     return torch.log(probs)
 
 
-# Freeze gradient when probs pass a threshold (to avoid collpase in pretraining)
-def clip_grad(probs, max=0.1, min=0.0):
-    keep = ((probs >= min) & (probs <= max)).float()
+# Freeze gradients for some probs to avoid collpase in pretraining (set the threshold higher if there are only a few valid actions)
+def clip_grad(probs, valid_mask, max=0.1, min=0.0):
+    # Keep probabilities within the range [min, max] or if they are less than 1/valid
+    # Keeping probs <= 1/valid allows the model to optimize the guide loss even if the probabilities are outside the threshold
+    valid = probs.sum(dim=-1)
+    keep = (((probs >= min) & (probs <= max)) | (probs <= 1/valid)).float()
     return probs * keep + (1 - keep) * probs.detach()
 
 
@@ -61,7 +64,7 @@ def calculate_loss(
 
     # Freeze gradient for probs above treshold to avoid collapse in pretraining
     if pretrain:
-        probs = clip_grad(probs, max=0.1, min=0.0)
+        probs = clip_grad(probs, valid_mask, max=0.1, min=0.0)
 
     # Mask prob distributions
     advantages_active = advantages[active_mask[:, :-1]]
@@ -99,14 +102,14 @@ def calculate_loss(
 
     # Compute losses
     ## Plain policy-gradient
-    actor_loss = -(advantages_active * chosen_log_probs).mean()
+    # actor_loss = -(advantages_active * chosen_log_probs).mean()
     ## Policy Gradient KL-Region Implementation
-    # clip_eps = 0.2
-    # ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
-    # clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
-    # surr1 = ratio * advantages_active
-    # surr2 = clipped * advantages_active
-    # actor_loss = -torch.min(surr1, surr2).mean()
+    clip_eps = 0.05
+    ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
+    clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
+    surr1 = ratio * advantages_active
+    surr2 = clipped * advantages_active
+    actor_loss = -torch.min(surr1, surr2).mean()
 
     critic_loss = critic_losses.mean()
     entropy_loss = -entropies_active.mean()
