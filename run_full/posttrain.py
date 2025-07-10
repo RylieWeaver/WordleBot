@@ -73,7 +73,6 @@ def main():
         config["Training"]["scheduling"]["global_lr_decay_factor"],
         config["Training"]["scheduling"]["lr_decay_factor"],
         config["Training"]["scheduling"]["greedify_patience"],
-        config["Training"]["scheduling"]["window_size"],
         config["Training"]["scheduling"]["warmup_steps"],
         config["Training"]["scheduling"]["early_stopping_patience"],
         config
