@@ -25,8 +25,8 @@ def save_checkpoint(actor_critic_net, accuracy, guesses, config, checkpoint_dir,
 
 def rest_computer(target_vocab_size):
     if target_vocab_size >= 2000:
-        time.sleep(9.0)
+        time.sleep(20.0)
     elif target_vocab_size >= 1000:
-        time.sleep(6.0)
+        time.sleep(5.0)
     else:
-        time.sleep(15.0)
+        time.sleep(2.0)

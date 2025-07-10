@@ -15,7 +15,8 @@ from wordle.utils import load_config
 def main():
     # Setup
     config = load_config('posttrain_config.json')
-    checkpoint_config = load_config('pretrain_log/config.json')
+    load_dir = 'pretrain_log'
+    checkpoint_config = load_config(f'{load_dir}/config.json')
     device = config["Model"]["device"]
 
     # Data
@@ -34,7 +35,7 @@ def main():
         dropout=config["Model"]["dropout"],
         device=device
     ).to(device)
-    actor_critic_net.load_state_dict(torch.load('pretrain_log/best_model.pth', map_location=device, weights_only=True))
+    actor_critic_net.load_state_dict(torch.load(f'{load_dir}/best_model.pth', map_location=device, weights_only=True))
 
     # Train the network
     posttrain(
@@ -75,7 +76,6 @@ def main():
         config["Training"]["scheduling"]["window_size"],
         config["Training"]["scheduling"]["warmup_steps"],
         config["Training"]["scheduling"]["early_stopping_patience"],
-        config["Training"]["scheduling"]["stopping_patience"],
         config
     )
 

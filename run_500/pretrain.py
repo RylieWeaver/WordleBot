@@ -57,13 +57,13 @@ def main():
         config["Training"]["loss"]["kl_reg_coef"],
         config["Training"]["loss"]["kl_guide_coef"],
         config["Training"]["loss"]["kl_best_coef"],
+        config["Training"]["peek"],
         config["Exploration"]["alpha"],
         config["Exploration"]["temperature"],
         config["Training"]["log"]["enabled"],
         os.path.join(os.getcwd(), config["Training"]["log"]["dir"]),
         config["Training"]["scheduling"]["warmup_steps"],
         config["Training"]["scheduling"]["early_stopping_patience"],
-        config["Training"]["scheduling"]["stopping_patience"],
         config
     )
 

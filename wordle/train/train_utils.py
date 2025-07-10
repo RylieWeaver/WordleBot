@@ -9,8 +9,8 @@ def log_normalize(probs, eps=1e-12, clamp=1e-12):
     return torch.log(probs)
 
 
-# Freeze gradients for some probs to avoid collpase in pretraining (set the threshold higher if there are only a few valid actions)
-def clip_grad(probs, valid_mask, max=0.1, min=0.0):
+# Freeze gradients for some probs to avoid collapse in pretraining (set the threshold higher if there are only a few valid actions)
+def clip_grad(probs, valid_mask, max=0.01, min=0.0):
     # Keep probabilities within the range [min, max] or if they are less than 1/valid
     # Keeping probs <= 1/valid allows the model to optimize the guide loss even if the probabilities are outside the threshold
     valid = valid_mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
@@ -34,7 +34,8 @@ def calculate_loss(
     active_mask,
     valid_mask,
     norm=True,
-    pretrain=False
+    clip_probs=False,
+    clip_advantages=False,
 ):
     """
     Calculate the loss components and total weighted loss:
@@ -63,8 +64,8 @@ def calculate_loss(
     eps = 1e-10  # Small value to avoid instabilities
 
     # Freeze gradient for probs above treshold to avoid collapse in pretraining
-    if pretrain:
-        probs = clip_grad(probs, valid_mask, max=0.1, min=0.0)
+    if clip_probs:
+        probs = clip_grad(probs, valid_mask, max=0.01, min=0.0)
 
     # Mask prob distributions
     advantages_active = advantages[active_mask[:, :-1]]
@@ -101,15 +102,17 @@ def calculate_loss(
         advantages_active = (advantages_active - mean_adv) / std_adv
 
     # Compute losses
-    ## Plain policy-gradient
-    # actor_loss = -(advantages_active * chosen_log_probs).mean()
-    ## Policy Gradient KL-Region Implementation
-    clip_eps = 0.05
-    ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
-    clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
-    surr1 = ratio * advantages_active
-    surr2 = clipped * advantages_active
-    actor_loss = -torch.min(surr1, surr2).mean()
+    if clip_advantages:
+        ## Policy Gradient KL-Region Implementation
+        clip_eps = 0.2
+        ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
+        clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
+        surr1 = ratio * advantages_active
+        surr2 = clipped * advantages_active
+        actor_loss = -torch.min(surr1, surr2).mean()
+    else:
+        ## Plain policy-gradient
+        actor_loss = -(chosen_log_probs * advantages_active).mean()
 
     critic_loss = critic_losses.mean()
     entropy_loss = -entropies_active.mean()

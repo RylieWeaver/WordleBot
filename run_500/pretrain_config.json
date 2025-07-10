@@ -12,7 +12,7 @@
     "Training": {
         "epochs": 1000000,
         "lr": 1e-4,
-        "batch_size": 500,
+        "batch_size": 275,
         "minibatch_size": null,
         "search": {
             "k": 5,
@@ -22,7 +22,7 @@
         },
         "rewards": {
             "gamma": 0.99,
-            "lam": 0.95,
+            "lam": 0.0,
             "m": 3
         },
         "loss": {
@@ -33,14 +33,14 @@
             "kl_guide_coef": 0.25,
             "kl_best_coef": 0.10
         },
+        "peek": 0.1,
         "scheduling": {
-            "warmup_steps": 200,
-            "early_stopping_patience": 200,
-            "stopping_patience": 1000
+            "warmup_steps": 100,
+            "early_stopping_patience": 200
         },
         "log": {
             "enabled": true,
-            "dir": "test_pretrain_log"
+            "dir": "pretrain_log"
         }
     },
     "Exploration": {
