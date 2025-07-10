@@ -11,7 +11,7 @@
         "epochs": 1000000,
         "lr": 3e-5,
         "batch_size": 1300,
-        "minibatch_size": null,
+        "minibatch_size": 200,
         "search": {
             "k": 5,
             "r": 4,
