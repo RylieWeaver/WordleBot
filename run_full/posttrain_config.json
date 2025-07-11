@@ -10,8 +10,9 @@
     "Training": {
         "epochs": 1000000,
         "lr": 3e-5,
-        "batch_size": 1300,
-        "minibatch_size": 200,
+        "batch_size": 650,
+        "collect_minibatch_size": 400,
+        "process_minibatch_size": null,
         "search": {
             "k": 5,
             "r": 4,
@@ -36,7 +37,7 @@
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,
             "global_lr_decay_factor": 0.995,
-            "greedify_patience": 10,
+            "greedify_patience": 3,
             "warmup_steps": 100,
             "early_stopping_patience": 200
         },

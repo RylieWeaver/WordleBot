@@ -33,6 +33,8 @@ def main():
         dropout=config["Model"]["dropout"],
         device=device
     ).to(device)
+    load_dir = 'pretrain_log'
+    actor_critic_net.load_state_dict(torch.load(f'{load_dir}/best_model.pth', map_location=device, weights_only=True))
 
     # Train the network
     pretrain(
@@ -42,7 +44,8 @@ def main():
         config["Data"]["max_guesses"],
         config["Training"]["lr"],
         config["Training"]["batch_size"],
-        config["Training"]["minibatch_size"],
+        config["Training"]["collect_minibatch_size"],
+        config["Training"]["process_minibatch_size"],
         config["Training"]["epochs"],
         config["Training"]["search"]["k"],
         config["Training"]["search"]["r"],

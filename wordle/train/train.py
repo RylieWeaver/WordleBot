@@ -7,7 +7,6 @@ import traceback
 
 # Torch
 import torch
-from torch.utils.data import DataLoader
 import torch.optim as optim
 
 # Wordle
@@ -28,7 +27,8 @@ def pretrain(
     max_guesses,
     lr,
     batch_size,
-    minibatch_size,
+    collect_minibatch_size,
+    process_minibatch_size,
     epochs,
     k,
     r,
@@ -111,7 +111,7 @@ def pretrain(
             try:
                 # -------- Collect Episodes in Minibatches --------
                 alphabet_states_batch, guess_states_batch, expected_values_batch, expected_rewards_batch, rewards_batch, guess_mask_batch, active_mask_batch, valid_mask_batch = [], [], [], [], [], [], [], []
-                mb_size = minibatch_size if minibatch_size is not None else len(epoch_idx)
+                mb_size = collect_minibatch_size if collect_minibatch_size is not None else len(epoch_idx)
                 num_minibatches = (len(epoch_idx) + mb_size - 1) // mb_size
                 for mb in range(num_minibatches):
                     # Slice minibatch
@@ -172,7 +172,7 @@ def pretrain(
 
 
         # ------------------ Wrap episode processing in a try-except to handle lightning strikes ------------------
-        rollout_size = 5
+        rollout_size = 10
         correct_rollout = []
         for update in range(rollout_size):
             epoch_idx = epoch_idx[torch.randperm(len(epoch_idx))]  # Shuffle the indices
@@ -182,7 +182,7 @@ def pretrain(
                 for attempt in range(1, max_attempts + 1):
                     try:
                         # -------- Process Episodes and Backprop in Minibatches --------
-                        mb_size = minibatch_size if minibatch_size is not None else len(batch_idx)
+                        mb_size = process_minibatch_size if process_minibatch_size is not None else len(batch_idx)
                         num_minibatches = (len(batch_idx) + mb_size - 1) // mb_size
                         for mb in range(num_minibatches):
                             # Slice minibatch
@@ -197,42 +197,42 @@ def pretrain(
                             valid_mask_minibatch = valid_mask_batch[mb_idx]
 
                             # ---------------- Process Episodes Old Net ----------------
-                            with torch.no_grad():
-                                _, old_probs_minibatch, _, _ = process_episodes(
-                                    old_policy_net,
-                                    alphabet_states_minibatch,
-                                    guess_states_minibatch,
-                                    expected_values_minibatch,
-                                    expected_rewards_minibatch,
-                                    rewards_minibatch,
-                                    active_mask_minibatch,
-                                    valid_mask_minibatch,
-                                    alpha,
-                                    temperature,
-                                    gamma,
-                                    lam,
-                                    reward_blend_factor,
-                                    value_blend_factor,
-                                )
+                            # with torch.no_grad():
+                            #     _, old_probs_minibatch, _, _ = process_episodes(
+                            #         old_policy_net,
+                            #         alphabet_states_minibatch,
+                            #         guess_states_minibatch,
+                            #         expected_values_minibatch,
+                            #         expected_rewards_minibatch,
+                            #         rewards_minibatch,
+                            #         active_mask_minibatch,
+                            #         valid_mask_minibatch,
+                            #         alpha,
+                            #         temperature,
+                            #         gamma,
+                            #         lam,
+                            #         reward_blend_factor,
+                            #         value_blend_factor,
+                            #     )
 
                             # ---------------- Process Episodes Best Checkpoint ----------------
-                            with torch.no_grad():
-                                _, best_probs_minibatch, _, _ = process_episodes(
-                                    best_policy_net,
-                                    alphabet_states_minibatch,
-                                    guess_states_minibatch,
-                                    expected_values_minibatch,
-                                    expected_rewards_minibatch,
-                                    rewards_minibatch,
-                                    active_mask_minibatch,
-                                    valid_mask_minibatch,
-                                    alpha,
-                                    temperature,
-                                    gamma,
-                                    lam,
-                                    reward_blend_factor,
-                                    value_blend_factor,
-                                )
+                            # with torch.no_grad():
+                            #     _, best_probs_minibatch, _, _ = process_episodes(
+                            #         best_policy_net,
+                            #         alphabet_states_minibatch,
+                            #         guess_states_minibatch,
+                            #         expected_values_minibatch,
+                            #         expected_rewards_minibatch,
+                            #         rewards_minibatch,
+                            #         active_mask_minibatch,
+                            #         valid_mask_minibatch,
+                            #         alpha,
+                            #         temperature,
+                            #         gamma,
+                            #         lam,
+                            #         reward_blend_factor,
+                            #         value_blend_factor,
+                            #     )
 
                             # ---------------- Process Episodes Current Net ----------------
                             actor_critic_net.train()
@@ -252,6 +252,8 @@ def pretrain(
                                 reward_blend_factor,
                                 value_blend_factor,
                             )
+                            old_probs_minibatch = probs_minibatch.detach()  # Detach old probs to prevent gradients from flowing back to the old policy
+                            best_probs_minibatch = probs_minibatch.detach()  # Detach best probs to prevent gradients from flowing back to the best policy
 
                             # -------------- Compute Loss --------------
                             (loss_mb, actor_loss_mb, critic_loss_mb, entropy_loss_mb, kl_reg_loss_mb, kl_guide_loss_mb, kl_best_loss_mb) = calculate_loss(
@@ -333,6 +335,9 @@ def pretrain(
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
         target_idx = torch.arange(len(target_vocab)).to(device)
+        size1 = collect_minibatch_size if collect_minibatch_size is not None else len(target_idx)
+        size2 = process_minibatch_size if process_minibatch_size is not None else len(target_idx)
+        test_mb_size = min(size1, size2)
         (test_loss, test_actor_loss, test_critic_loss, test_entropy_loss, test_kl_reg_loss, test_kl_guide_loss, test_kl_best_loss, test_correct, test_accuracy, test_guesses,) = test(
             old_policy_net,
             best_policy_net,
@@ -341,7 +346,7 @@ def pretrain(
             target_vocab,
             max_guesses,
             target_idx,
-            minibatch_size if minibatch_size is not None else len(target_idx),
+            test_mb_size,
             total_vocab_tensor,
             target_vocab_tensor,
             total_vocab_states,
@@ -418,7 +423,8 @@ def posttrain(
     max_guesses,
     lr,
     batch_size,
-    minibatch_size,
+    collect_minibatch_size,
+    process_minibatch_size,
     epochs,
     k,
     r,
@@ -517,7 +523,7 @@ def posttrain(
             try:
                 # -------- Collect Episodes in Minibatches --------
                 alphabet_states_batch, guess_states_batch, expected_values_batch, expected_rewards_batch, rewards_batch, guess_mask_batch, active_mask_batch, valid_mask_batch = [], [], [], [], [], [], [], []
-                mb_size = minibatch_size if minibatch_size is not None else len(epoch_idx)
+                mb_size = collect_minibatch_size if collect_minibatch_size is not None else len(epoch_idx)
                 num_minibatches = (len(epoch_idx) + mb_size - 1) // mb_size
                 for mb in range(num_minibatches):
                     # Slice minibatch
@@ -578,17 +584,19 @@ def posttrain(
 
 
         # ------------------ Wrap episode processing in a try-except to handle lightning strikes ------------------
-        rollout_size = 5
-        correct_rollout = []
-        for update in range(rollout_size):
-            epoch_idx = epoch_idx[torch.randperm(len(epoch_idx))]  # Shuffle the indices
-            num_batches = (len(epoch_idx) + batch_size - 1) // batch_size
-            for batch in range(num_batches):
-                batch_idx = epoch_idx[batch * batch_size : (batch+1) * batch_size]
-                for attempt in range(1, max_attempts + 1):
-                    try:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                rollout_size = 5
+                correct_rollout = []
+                # ---------------- Multiple Passes Per Rollout ----------------
+                for update in range(rollout_size):
+                    epoch_idx = epoch_idx[torch.randperm(len(epoch_idx))]  # Shuffle the indices
+                    num_batches = (len(epoch_idx) + batch_size - 1) // batch_size
+                    # ------------------ Pass Through Episodes ------------------
+                    for batch in range(num_batches):
+                        batch_idx = epoch_idx[batch * batch_size : (batch+1) * batch_size]
                         # -------- Process Episodes and Backprop in Minibatches --------
-                        mb_size = minibatch_size if minibatch_size is not None else len(batch_idx)
+                        mb_size = process_minibatch_size if process_minibatch_size is not None else len(batch_idx)
                         num_minibatches = (len(batch_idx) + mb_size - 1) // mb_size
                         for mb in range(num_minibatches):
                             # Slice minibatch
@@ -718,27 +726,31 @@ def posttrain(
                         optimizer.zero_grad(set_to_none=True)
                         scheduler.step()
 
-                        break
-                    # ---------------- Print exception errors and continue ----------------
-                    except RuntimeError as e:
-                        if attempt < max_attempts:
-                            print(f"Retrying batch {batch} due to error:\n")
-                            traceback.print_exc()
-                        else:
-                            optimizer.zero_grad(set_to_none=True)  # Reset optimizer state
-                            print(f"Failed to process batch {batch} after {max_attempts} attempts due to error:\n.")
-                            traceback.print_exc()
-                            continue   # out of retries, continue
-                        time.sleep(3)   # wait 3 seconds before next try
+                # ---------------- Correct for a Given Policy ----------------
+                correct_rollout = torch.cat(correct_rollout, dim=0)
 
-        # ---------------- Correct for a Given Policy ----------------
-        correct_rollout = torch.cat(correct_rollout, dim=0)
+                # ---------------- Update Replay ----------------
+                replay_loader.update(epoch_idx, epoch_idx[~correct_rollout.cpu()])
 
-        # ---------------- Update Replay ----------------
-        replay_loader.update(epoch_idx, epoch_idx[~correct_rollout.cpu()])
+                break
+            # ---------------- Print exception errors and continue ----------------
+            except RuntimeError as e:
+                if attempt < max_attempts:
+                    print(f"Retrying batch {batch} due to error:\n")
+                    traceback.print_exc()
+                else:
+                    optimizer.zero_grad(set_to_none=True)  # Reset optimizer state
+                    correct_rollout = []  # Reset correct rollout
+                    print(f"Failed to process batch {batch} after {max_attempts} attempts due to error:\n.")
+                    traceback.print_exc()
+                    continue   # out of retries, continue
+                time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
         target_idx = torch.arange(len(target_vocab)).to(device)
+        size1 = collect_minibatch_size if collect_minibatch_size is not None else len(target_idx)
+        size2 = process_minibatch_size if process_minibatch_size is not None else len(target_idx)
+        test_mb_size = min(size1, size2)
         (test_loss, test_actor_loss, test_critic_loss, test_entropy_loss, test_kl_reg_loss, test_kl_guide_loss, test_kl_best_loss, test_correct, test_accuracy, test_guesses,) = test(
             old_policy_net,
             best_policy_net,
@@ -747,7 +759,7 @@ def posttrain(
             target_vocab,
             max_guesses,
             target_idx,
-            minibatch_size if minibatch_size is not None else len(target_idx),
+            test_mb_size,
             total_vocab_tensor,
             target_vocab_tensor,
             total_vocab_states,

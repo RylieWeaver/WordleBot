@@ -4,16 +4,17 @@
         "max_guesses": 6
     },
     "Model": {
-        "hidden_dim": 2048,
-        "layers": 5,
+        "hidden_dim": 512,
+        "layers": 3,
         "dropout": 0.1,
         "device": "mps"
     },
     "Training": {
         "epochs": 1000000,
         "lr": 3e-5,
-        "batch_size": 1300,
-        "minibatch_size": 200,
+        "batch_size": 650,
+        "collect_minibatch_size": 400,
+        "process_minibatch_size": null,
         "search": {
             "k": 5,
             "r": 4,
@@ -31,7 +32,7 @@
             "entropy_coef": 0.05,
             "kl_reg_coef": 0.00,
             "kl_guide_coef": 0.25,
-            "kl_best_coef": 0.10
+            "kl_best_coef": 0.00
         },
         "peek": 0.1,
         "scheduling": {
