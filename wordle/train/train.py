@@ -4,7 +4,6 @@ import copy
 import time
 import traceback
 
-
 # Torch
 import torch
 import torch.optim as optim
@@ -477,9 +476,7 @@ def posttrain(
     total_vocab_states = construct_vocab_states(words_to_tensor(total_vocab).to(device))  # [total_vocab_size, 26, 11]
     target_vocab_states = construct_vocab_states(words_to_tensor(target_vocab).to(device))  # [target_vocab_size, 26, 11]
 
-    # train_loader = DataLoader(torch.arange(len(target_vocab)), batch_size=batch_size, shuffle=True)
     replay_loader = HardWordBuffer(target_vocab, batch_size=batch_size, capacity=max(int(0.05*len(target_vocab)), 1), replay_ratio=0.2, rho=0.1)
-    # test_loader = DataLoader(torch.arange(len(target_vocab)), batch_size=batch_size, shuffle=False)
 
     replay=True
     optimizer = optim.AdamW(actor_critic_net.parameters(), lr=lr, weight_decay=1e-4)
