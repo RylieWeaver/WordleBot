@@ -26,7 +26,3 @@ from .episode import (
     collect_episodes,
     process_episodes,
 )
-
-from .reward_model.reward_model import (
-    RewardNet,
-)
