@@ -90,6 +90,6 @@ def inference(
 
     # ---------------- Concatenate guess mask results ----------------
     guess_mask_batch = torch.cat(guess_mask_batch, dim=0)  # [batch_size, max_guesses, total_vocab_size]
-    guess_idx_batch = torch.argmax(guess_mask_batch.bool(), dim=-1)[0]  # [max_guesses]
+    guess_idx_batch = torch.argmax(guess_mask_batch.float(), dim=-1)[0]  # [max_guesses]
 
     return guess_idx_batch
