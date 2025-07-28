@@ -11,7 +11,7 @@ import torch.nn.functional as F
 # SC-BLOCK
 ##############################################
 class MLPBlock(nn.Module):
-    def __init__(self, dim, activation=nn.SiLU(), dropout=0.1):
+    def __init__(self, dim, activation=nn.SiLU(), dropout=0.0):
         super().__init__()
         self.res = nn.Sequential(
             nn.LayerNorm(dim),
@@ -217,6 +217,8 @@ class DotGuessStateNet(nn.Module):
         self.state_layers = nn.ModuleList()
         self.guess_layers = nn.ModuleList()
         self.hidden_dim = hidden_dim
+        guess_dim = max(hidden_dim // 16, 16)
+        self.guess_dim = guess_dim
         self.act = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
         self.device = device
@@ -225,22 +227,24 @@ class DotGuessStateNet(nn.Module):
 
         # Embedding
         # self.state_embed = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-        # self.guess_embed = nn.Sequential(nn.LayerNorm(130), nn.Linear(130, hidden_dim), self.act, self.dropout)
+        # self.guess_embed = nn.Sequential(nn.LayerNorm(130), nn.Linear(130, guess_dim), self.act, self.dropout)
         self.state_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-        self.guess_embed = nn.Sequential(nn.Linear(130, hidden_dim), self.act, self.dropout)
+        self.guess_embed = nn.Sequential(nn.Linear(130, guess_dim), self.act, self.dropout)
 
         # Layers
         for _ in range(layers):
             self.state_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
-            self.guess_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
+            self.guess_layers.append(MLPBlock(guess_dim, activation=self.act, dropout=dropout))
 
         # Guess state attention
         self.state_q = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
-        self.guess_k = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
-        
+        self.guess_k = nn.Sequential(nn.LayerNorm(guess_dim), nn.Linear(guess_dim, hidden_dim))
+
         # Output heads
-        self.logit = nn.Linear(hidden_dim, output_dim)
-        self.value = nn.Linear(hidden_dim, 1)
+        self.value = nn.Sequential(
+            MLPBlock(hidden_dim, activation=self.act, dropout=dropout),
+            nn.Linear(hidden_dim, 1)
+        )
 
     def forward(self, x):
         """
@@ -266,6 +270,77 @@ class DotGuessStateNet(nn.Module):
         # Logit
         q = self.state_q(x)  # [batch_size, *, hidden_dim]
         k = self.guess_k(g)  # [total_vocab_size, hidden_dim]
+        scores = (q @ k.T) / sqrt(self.hidden_dim)  # [batch_size, *, total_vocab_size]
+
+        # Value
+        state_value = self.value(x)  # [batch_size, *, 1]
+
+        return scores, state_value
+    
+
+
+############################################
+# DOT GUESS STATE NETWORK
+############################################
+class DotGuessStateNet2(nn.Module):
+    def __init__(self, input_dim, hidden_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
+        super().__init__()
+        self.state_layers = nn.ModuleList()
+        self.letter_layers = nn.ModuleList()
+        self.hidden_dim = hidden_dim
+        self.vocab_size = total_vocab_tensor.shape[0]
+        self.grad_K = 512
+        self.act = nn.SiLU()
+        self.dropout = nn.Dropout(dropout)
+        self.device = device
+        offsets = 26*torch.arange(5, device=device).unsqueeze(0)  # [1, 5]
+        self.register_buffer("guess_idxs", (total_vocab_tensor + offsets).to(torch.long))  # [total_vocab_size, 5]
+        self.register_buffer("letter_mask", torch.arange(130, device=device).to(torch.long))  # [130]
+
+        # Embedding
+        self.state_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
+        self.letter_embed = nn.Sequential(nn.Embedding(130, hidden_dim), self.act, self.dropout)
+
+        # Layers
+        for _ in range(layers):
+            self.state_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
+            self.letter_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
+
+        # Guess state attention
+        self.state_q = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
+        self.letter_k = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
+
+        # Output heads
+        self.value = nn.Sequential(
+            MLPBlock(hidden_dim, activation=self.act, dropout=dropout),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, x):
+        """
+        x: [batch_size, *, state_dim]
+        returns: (logits, value)
+          logits: [batch_size, *, total_vocab_size]
+          value:  [batch_size, *, 1]
+        """
+        # Input embedding
+        sc_x = self.state_embed(x)  # Initial embedding acts as the entire network's residual connection
+        sc_l = self.letter_embed(self.letter_mask)  # [130, hidden_dim]
+
+        # Pre-filter layers
+        x = sc_x
+        l = sc_l
+        for state_layer, letter_layer in zip(self.state_layers, self.letter_layers):
+            x = state_layer(x)
+            l = letter_layer(l)
+        # Overall residual connection
+        x = (x + sc_x) / sqrt(2)  # [batch_size, *, hidden_dim]
+        l = (l + sc_l) / sqrt(2)  # [130, hidden_dim]
+
+        # Logit
+        q = self.state_q(x)  # [batch_size, *, hidden_dim]
+        l = self.letter_k(l)  # [130, hidden_dim]
+        k = l[self.guess_idxs].mean(dim=-2)  # [total_vocab_size, hidden_dim]
         scores = (q @ k.T) / sqrt(self.hidden_dim)  # [batch_size, *, total_vocab_size]
 
         # Value
