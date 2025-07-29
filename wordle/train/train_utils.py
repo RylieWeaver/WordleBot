@@ -9,12 +9,9 @@ def log_normalize(probs, eps=1e-12, clamp=1e-12):
     return torch.log(probs)
 
 
-# Freeze gradients for some probs to avoid collapse in pretraining (set the threshold higher if there are only a few valid actions)
-def clip_grad(probs, valid_mask, max=0.01, min=0.0):
-    # Keep probabilities within the range [min, max] or if they are less than 1/valid
-    # Keeping probs <= 1/valid allows the model to optimize the guide loss even if the probabilities are outside the threshold
-    valid = valid_mask.sum(dim=-1, keepdim=True).clamp_min(1.0)
-    keep = (((probs >= min) & ((probs <= max) | (probs <= 1/valid))).float())
+# Freeze gradients for some probs probs outside the range
+def clip_grad(probs, valid_mask, min=-0.01, max=0.99):
+    keep = (((probs >= min) & (probs <= max)).float())
     return probs * keep + (1 - keep) * probs.detach()
 
 
@@ -34,22 +31,23 @@ def calculate_loss(
     active_mask,
     valid_mask,
     norm=True,
-    clip_probs=False,
+    grad_range=(-0.01, 0.99),
     clip_advantages=False,
+    clip_eps=0.2,
 ):
     """
     Calculate the loss components and total weighted loss:
 
     Inputs:
-    - advantages: [batch_size, max_guesses]
-    - old_probs: [batch_size, max_guesses, vocab_size]
-    - guide_probs: [batch_size, max_guesses, vocab_size]
-    - best_probs: [batch_size, max_guesses, vocab_size]
-    - probs: [batch_size, max_guesses, vocab_size]
+    - advantages: [batch_size, *, max_guesses]
+    - old_probs: [batch_size, *, max_guesses, vocab_size]
+    - guide_probs: [batch_size, *, max_guesses, vocab_size]
+    - best_probs: [batch_size, *, max_guesses, vocab_size]
+    - probs: [batch_size, *, max_guesses, vocab_size]
     - coefs: coefficients for the loss components
-    - guess_mask: boolean mask indicating the guess made -- [batch_size, max_guesses+1, vocab_size]
-    - active_mask: boolean mask indicating if a game if still active -- [batch_size, max_guesses+1]
-    - valid_mask: boolean mask indicating if a guess is valid -- [batch_size, max_guesses, vocab_size]
+    - guess_mask: boolean mask indicating the guess made -- [batch_size, *, max_guesses+1, vocab_size]
+    - active_mask: boolean mask indicating if a game if still active -- [batch_size, *, max_guesses+1]
+    - valid_mask: boolean mask indicating if a guess is valid -- [batch_size, *, max_guesses, vocab_size]
 
     Intermediate:
     - Active: mask the tensors so that we don't use inactive games for our loss / parameter update
@@ -63,22 +61,18 @@ def calculate_loss(
     # Setup
     eps = 1e-10  # Small value to avoid instabilities
 
-    # # Freeze gradient for probs above treshold to avoid collapse in pretraining
-    # if clip_probs:
-    #     probs = clip_grad(probs, valid_mask, max=0.01, min=0.0)
-
-    # Freeze gradient for probs outside threshold
-    clipped_probs = clip_grad(probs, valid_mask, max=0.95, min=-0.01)
+    # Freeze gradient for probs outside threshold (used to avoid the kl-guide from getting too much of the gradient)
+    clipped_probs = clip_grad(probs, valid_mask, grad_range[0], grad_range[1])
 
     # Mask prob distributions
-    value_advantages_active = advantages[active_mask[:, :-1]]
-    old_probs_active = old_probs[active_mask[:, :-1]]
-    guide_probs_active = guide_probs[active_mask[:, :-1]]
-    best_probs_active = best_probs[active_mask[:, :-1]]
-    probs_active = probs[active_mask[:, :-1]]
-    clipped_probs_active = clipped_probs[active_mask[:, :-1]]
+    value_advantages_active = advantages[active_mask[..., :-1]]
+    old_probs_active = old_probs[active_mask[..., :-1]]
+    guide_probs_active = guide_probs[active_mask[..., :-1]]
+    best_probs_active = best_probs[active_mask[..., :-1]]
+    probs_active = probs[active_mask[..., :-1]]
+    clipped_probs_active = clipped_probs[active_mask[..., :-1]]
 
-    # Prob distributions KL-terms
+    # Prob distribution log terms
     old_log_probs_active = log_normalize(old_probs_active, eps=eps)
     guide_log_probs_active = log_normalize(guide_probs_active, eps=eps)
     best_log_probs_active = log_normalize(best_probs_active, eps=eps)
@@ -87,33 +81,33 @@ def calculate_loss(
 
     # Entropy
     entropy_probs = probs * valid_mask  # entropy regularization should not include the probabilities which we deem invalid
-    entropy_probs = entropy_probs / entropy_probs.sum(-1, keepdim=True).clamp_min(eps)
+    entropy_probs = entropy_probs / entropy_probs.sum(dim=-1, keepdim=True).clamp_min(eps)
     entropy_log_probs = log_normalize(entropy_probs, eps=eps)
     entropies = -torch.sum(entropy_probs * entropy_log_probs, dim=-1)
-    entropies_active = entropies[active_mask[:, :-1]]
+    entropies_active = entropies[active_mask[..., :-1]]
 
-    # Chosen probs used in actor loss
-    active_guess_mask = guess_mask[active_mask[:, :-1]]
+    # Probs of chosen actions are used in actor loss
+    active_guess_mask = guess_mask[active_mask[..., :-1]]
     chosen_log_probs = log_probs_active[active_guess_mask]
     chosen_old_log_probs = old_log_probs_active[active_guess_mask]
 
-    # Critic loss before advantage normalization
+    # Critic loss is computed with advantages before normalization
     critic_losses = value_advantages_active.pow(2)
 
     # Normalize advantages per time step
     if norm:
-        advantages_masked = advantages * active_mask[:, :-1]
-        num_active = active_mask[:, :-1].sum(dim=0, keepdim=True).detach()
+        advantages_masked = advantages * active_mask[..., :-1]
+        num_active = active_mask[..., :-1].sum(dim=0, keepdim=True).detach()
         sum_adv = (advantages_masked).sum(dim=0, keepdim=True)
         mean_adv = (sum_adv / num_active.clamp_min(eps)).detach()
-        diff_adv = (advantages - mean_adv) * active_mask[:, :-1]
+        diff_adv = (advantages - mean_adv) * active_mask[..., :-1]
         std_adv = ((diff_adv.pow(2).sum(dim=0, keepdim=True) / num_active.clamp_min(eps)).sqrt()).detach().clamp_min(eps)
         zero = torch.zeros_like(mean_adv)
         one = torch.ones_like(std_adv)
         mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games
         std_adv = torch.where(num_active <= 1, one,  std_adv)  # default to 1.0 std when not enough active games
         advantages_norm = (advantages - mean_adv) / std_adv
-        policy_advantages_active = advantages_norm[active_mask[:, :-1]]
+        policy_advantages_active = advantages_norm[active_mask[..., :-1]]
 
     # # Normalize advantages
     # if norm:
@@ -121,22 +115,23 @@ def calculate_loss(
     #     std_adv = advantages_active.std().detach().clamp_min(eps)
     #     advantages_active = (advantages_active - mean_adv) / std_adv
 
-    # Compute losses
+    # Actor loss
     if clip_advantages:
-        ## Policy Gradient KL-Region Implementation
-        clip_eps = 0.2
+        ## Proximal Policy Optimization (PPO) (for training)
         ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
         clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
         surr1 = ratio * policy_advantages_active
         surr2 = clipped * policy_advantages_active
         actor_loss = -torch.min(surr1, surr2).mean()
     else:
-        ## Plain policy-gradient
+        ## Plain policy-gradient (for testing)
         actor_loss = -(chosen_log_probs * policy_advantages_active).mean()
 
+    # Critic loss
     critic_loss = critic_losses.mean()
+    # Entropy loss
     entropy_loss = -entropies_active.mean()
-    # Normal KL-Div
+    # KL-Div losses
     kl_reg_loss = F.kl_div(old_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
     kl_guide_loss = F.kl_div(guide_log_probs_active, clipped_log_probs_active, reduction='batchmean', log_target=True)
     kl_best_loss = F.kl_div(best_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)

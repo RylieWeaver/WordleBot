@@ -9,10 +9,17 @@
     },
     "Training": {
         "epochs": 1000000,
+        "rollout_size": 6,
         "lr": 3e-5,
+        "clip_eps": 0.2,
+        "max_grad_norm": 3.0,
         "batch_size": 3000,
+        "target_repeats": 4,
         "collect_minibatch_size": 100,
         "process_minibatch_size": 100,
+        "replay": {
+            "replay_ratio": 0.25
+        },
         "search": {
             "k": 5,
             "r": 4,
@@ -20,9 +27,12 @@
             "test_search": false
         },
         "rewards": {
+            "correct_reward": 0.1,
             "gamma": 0.20,
-            "lam": 0.50,
-            "m": 3
+            "lam": 1.00,
+            "m": 3,
+            "reward_blend_factor": 0.9,
+            "value_blend_factor": 0.1
         },
         "loss": {
             "actor_coef": 1.0,
@@ -43,7 +53,7 @@
         },
         "log": {
             "enabled": true,
-            "dir": "12latest_posttrain_log"
+            "dir": "log_dir"
         }
     },
     "Exploration": {

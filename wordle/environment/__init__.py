@@ -6,7 +6,6 @@ from .state import (
 from .entropy import (
     calculate_alphabet_entropy,
     calculate_entropy_rewards,
-    calculate_entropy_rewards_loop,
 )
 
 from .step import (
