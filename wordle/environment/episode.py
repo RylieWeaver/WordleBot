@@ -32,8 +32,8 @@ def collect_episodes(
     This will be masked to the actual number of guesses taken.
 
     Inputs:
-    - total_vocab: the total vocabulary (10657 non-target plus 2315 target)
-    - target_vocab: the vocabulary of targets (2315)
+    - total_vocab: the total vocabulary (10657 non-target plus 2316 target)
+    - target_vocab: the vocabulary of targets (2316)
     - total_vocab_tensor: [total_vocab_size, 5]
     - target_vocab_tensor: [target_vocab_size, 5]
     - total_vocab_states: [total_vocab_size, 26, 11]
@@ -61,8 +61,8 @@ def collect_episodes(
         # Setup
         device = actor_critic_net.device
         episodes_shape = target_tensor.shape[:-1]
-        total_vocab_size = len(total_vocab)  # action size (10657 + 2315)
-        target_size = len(target_vocab)  # target size (2315)
+        total_vocab_size = len(total_vocab)  # action size (10657 + 2316)
+        target_size = len(target_vocab)  # target size (2316)
 
         # Initialize Tensors
         alphabet_states_batch = torch.zeros(

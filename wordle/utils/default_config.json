@@ -3,7 +3,7 @@
         "state_size": 292,
         "max_guesses": 6,
         "guess_vocab_size": 10657,
-        "target_vocab_size": 2315
+        "target_vocab_size": 2316
     },
     "Model": {
         "hidden_dim": 1024,

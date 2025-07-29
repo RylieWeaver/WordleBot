@@ -73,7 +73,7 @@ def get_minmax_stats(total_vocab, target_vocab, checkpoint=False):
         # Do all the guesses and stop if got correct
         guesses = torch.tensor(0)  # Guess count
         while guesses < max_guesses and not correct.bool():
-            guess_idx = select_action_minmax(alphabet_state, total_vocab_tensor, target_vocab_tensor, target_vocab_states, target_mask, first_guess=((guesses==0) and (len(total_vocab)==12972)))  # Only use first guess for full vocab as well (12972 = 10657+2315)
+            guess_idx = select_action_minmax(alphabet_state, total_vocab_tensor, target_vocab_tensor, target_vocab_states, target_mask, first_guess=((guesses==0) and (len(total_vocab)==12973)))  # Only use first guess for full vocab as well (12973 = 10657+2316)
             alphabet_state, correct, target_mask = simulate_action_benchmark(alphabet_state, total_vocab_tensor[guess_idx.squeeze()], target_vocab_tensor[i], target_vocab_states)  # [26, 11]
             guesses += 1
 

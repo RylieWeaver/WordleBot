@@ -94,26 +94,27 @@ def calculate_loss(
     # Critic loss is computed with advantages before normalization
     critic_losses = value_advantages_active.pow(2)
 
-    # Normalize advantages per time step
-    if norm:
-        advantages_masked = advantages * active_mask[..., :-1]
-        num_active = active_mask[..., :-1].sum(dim=0, keepdim=True).detach()
-        sum_adv = (advantages_masked).sum(dim=0, keepdim=True)
-        mean_adv = (sum_adv / num_active.clamp_min(eps)).detach()
-        diff_adv = (advantages - mean_adv) * active_mask[..., :-1]
-        std_adv = ((diff_adv.pow(2).sum(dim=0, keepdim=True) / num_active.clamp_min(eps)).sqrt()).detach().clamp_min(eps)
-        zero = torch.zeros_like(mean_adv)
-        one = torch.ones_like(std_adv)
-        mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games
-        std_adv = torch.where(num_active <= 1, one,  std_adv)  # default to 1.0 std when not enough active games
-        advantages_norm = (advantages - mean_adv) / std_adv
-        policy_advantages_active = advantages_norm[active_mask[..., :-1]]
-
-    # # Normalize advantages
+    # # Normalize advantages per time step
     # if norm:
-    #     mean_adv = advantages_active.mean().detach()
-    #     std_adv = advantages_active.std().detach().clamp_min(eps)
-    #     advantages_active = (advantages_active - mean_adv) / std_adv
+    #     advantages_masked = advantages * active_mask[..., :-1]
+    #     num_active = active_mask[..., :-1].sum(dim=0, keepdim=True).detach()
+    #     sum_adv = (advantages_masked).sum(dim=0, keepdim=True)
+    #     mean_adv = (sum_adv / num_active.clamp_min(eps)).detach()
+    #     diff_adv = (advantages - mean_adv) * active_mask[..., :-1]
+    #     std_adv = ((diff_adv.pow(2).sum(dim=0, keepdim=True) / num_active.clamp_min(eps)).sqrt()).detach().clamp_min(eps)
+    #     zero = torch.zeros_like(mean_adv)
+    #     one = torch.ones_like(std_adv)
+    #     mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games
+    #     std_adv = torch.where(num_active <= 1, one,  std_adv)  # default to 1.0 std when not enough active games
+    #     advantages_norm = (advantages - mean_adv) / std_adv
+    #     policy_advantages_active = advantages_norm[active_mask[..., :-1]]
+
+    # Normalize advantages
+    if norm:
+        policy_advantages_active = advantages[active_mask[..., :-1]]
+        mean_adv = policy_advantages_active.mean().detach()
+        std_adv = policy_advantages_active.std().detach().clamp_min(eps)
+        policy_advantages_active = (policy_advantages_active - mean_adv) / std_adv
 
     # Actor loss
     if clip_advantages:
