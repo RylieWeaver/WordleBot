@@ -165,6 +165,27 @@ class DotGuessStateNet(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
+        # Initialize guess keys
+        self.register_buffer("guess_k_static", torch.empty(0))   # will hold cached keys in eval
+
+    def _build_guess_k(self):
+        # Input embedding
+        sc_g = self.guess_embed(self.guess_states)  # [total_vocab_size, hidden_dim]
+        # Layers
+        g = sc_g
+        for guess_layer in self.guess_layers:
+            g = guess_layer(g)
+        g = (g + sc_g)  # [total_vocab_size, hidden_dim]
+        # Key projection
+        k = self.guess_k(g)  # [total_vocab_size, hidden_dim]
+        return k
+
+    def eval(self):
+        super().eval()
+        with torch.no_grad():
+            self.guess_k_static = self._build_guess_k().detach()
+        return self
+
     def forward(self, x):
         """
         x: [batch_size, *, state_dim]
@@ -172,30 +193,26 @@ class DotGuessStateNet(nn.Module):
           logits: [batch_size, *, total_vocab_size]
           value:  [batch_size, *, 1]
         """
-        # Input embedding
-        sc_x = self.state_embed(x)  # Initial embedding acts as the entire network's residual connection
-        sc_g = self.guess_embed(self.guess_states)  # [total_vocab_size, hidden_dim]
-
-        # Pre-filter layers
+        # State embedding
+        sc_x = self.state_embed(x)  # [batch_size, *, hidden_dim]
+        # Layers
         x = sc_x
-        g = sc_g
-        for state_layer, guess_layer in zip(self.state_layers, self.guess_layers):
+        for state_layer in self.state_layers:
             x = state_layer(x)
-            g = guess_layer(g)
-        # Overall residual connection
         x = (x + sc_x)  # [batch_size, *, hidden_dim]
-        g = (g + sc_g)  # [total_vocab_size, hidden_dim]
+
+        # Guess key embeddings
+        k = self._build_guess_k() if self.training else self.guess_k_static
 
         # Logit
         q = self.state_q(x)  # [batch_size, *, hidden_dim]
-        k = self.guess_k(g)  # [total_vocab_size, hidden_dim]
         scores = (q @ k.T) / sqrt(self.hidden_dim)  # [batch_size, *, total_vocab_size]
 
         # Value
         state_value = self.value(x)  # [batch_size, *, 1]
 
         return scores, state_value
-    
+
 
 
 ############################################
@@ -234,6 +251,28 @@ class DotGuessStateNet2(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
+        # Initialize guess keys
+        self.register_buffer("guess_k_static", torch.empty(0))   # will hold cached keys in eval
+
+    def _build_guess_k(self):
+        # Input embedding
+        sc_l = self.letter_embed(self.letter_mask)  # [130, hidden_dim]
+        # Layers
+        l = sc_l
+        for letter_layer in self.letter_layers:
+            l = letter_layer(l)
+        l = (l + sc_l)  # [130, hidden_dim]
+        # Key projection and mean
+        l = self.guess_k(l)  # [130, hidden_dim]
+        k = l[self.guess_idxs].mean(dim=-2)  # [total_vocab_size, hidden_dim]
+        return k
+
+    def eval(self):
+        super().eval()
+        with torch.no_grad():
+            self.guess_k_static = self._build_guess_k().detach()
+        return self
+
     def forward(self, x):
         """
         x: [batch_size, *, state_dim]
@@ -241,24 +280,19 @@ class DotGuessStateNet2(nn.Module):
           logits: [batch_size, *, total_vocab_size]
           value:  [batch_size, *, 1]
         """
-        # Input embedding
-        sc_x = self.state_embed(x)  # Initial embedding acts as the entire network's residual connection
-        sc_l = self.letter_embed(self.letter_mask)  # [130, hidden_dim]
-
-        # Pre-filter layers
+        # State embedding
+        sc_x = self.state_embed(x)  # [batch_size, *, hidden_dim]
+        # Layers
         x = sc_x
-        l = sc_l
-        for state_layer, letter_layer in zip(self.state_layers, self.letter_layers):
+        for state_layer in self.state_layers:
             x = state_layer(x)
-            l = letter_layer(l)
-        # Overall residual connection
-        x = (x + sc_x) / sqrt(2)  # [batch_size, *, hidden_dim]
-        l = (l + sc_l) / sqrt(2)  # [130, hidden_dim]
+        x = (x + sc_x)  # [batch_size, *, hidden_dim]
+
+        # Guess key embeddings
+        k = self._build_guess_k() if self.training else self.guess_k_static
 
         # Logit
         q = self.state_q(x)  # [batch_size, *, hidden_dim]
-        l = self.letter_k(l)  # [130, hidden_dim]
-        k = l[self.guess_idxs].mean(dim=-2)  # [total_vocab_size, hidden_dim]
         scores = (q @ k.T) / sqrt(self.hidden_dim)  # [batch_size, *, total_vocab_size]
 
         # Value

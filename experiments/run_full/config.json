@@ -4,6 +4,8 @@
         "max_guesses": 6
     },
     "Model": {
+        "hidden_dim": 1024,
+        "layers": 3,
         "dropout": 0.0,
         "device": "mps"
     },
@@ -40,7 +42,7 @@
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,
             "global_lr_decay_factor": 0.99,
-            "greedify_patience": 1,
+            "greedify_patience": 3,
             "warmup_steps": 300,
             "early_stopping_patience": 200
         },

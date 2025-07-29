@@ -102,13 +102,13 @@ def train(
     best_rollout_guesses = float(max_guesses)
     no_improve_count = 0
 
+    actor_critic_net.eval().train()  # Initalize eval() mode first in case of any buffer inits, then switch to train as expected
     old_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
     for p in old_policy_net.parameters():
         p.requires_grad = False
     best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
     for p in best_policy_net.parameters():
         p.requires_grad = False
-    actor_critic_net.train()
 
     max_attempts = 3
 
