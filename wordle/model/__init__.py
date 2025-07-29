@@ -1,1 +1,1 @@
-from .model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet, TransformerGuessStateNet, DotGuessStateNet
+from .model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet, TransformerGuessStateNet, DotGuessStateNet, DotGuessStateNet2

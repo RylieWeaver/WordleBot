@@ -63,22 +63,27 @@ def calculate_loss(
     # Setup
     eps = 1e-10  # Small value to avoid instabilities
 
-    # Freeze gradient for probs above treshold to avoid collapse in pretraining
-    if clip_probs:
-        probs = clip_grad(probs, valid_mask, max=0.01, min=0.0)
+    # # Freeze gradient for probs above treshold to avoid collapse in pretraining
+    # if clip_probs:
+    #     probs = clip_grad(probs, valid_mask, max=0.01, min=0.0)
+
+    # Freeze gradient for probs outside threshold
+    clipped_probs = clip_grad(probs, valid_mask, max=0.95, min=-0.01)
 
     # Mask prob distributions
-    advantages_active = advantages[active_mask[:, :-1]]
+    value_advantages_active = advantages[active_mask[:, :-1]]
     old_probs_active = old_probs[active_mask[:, :-1]]
     guide_probs_active = guide_probs[active_mask[:, :-1]]
     best_probs_active = best_probs[active_mask[:, :-1]]
     probs_active = probs[active_mask[:, :-1]]
+    clipped_probs_active = clipped_probs[active_mask[:, :-1]]
 
     # Prob distributions KL-terms
     old_log_probs_active = log_normalize(old_probs_active, eps=eps)
     guide_log_probs_active = log_normalize(guide_probs_active, eps=eps)
     best_log_probs_active = log_normalize(best_probs_active, eps=eps)
     log_probs_active = log_normalize(probs_active, eps=eps)
+    clipped_log_probs_active = log_normalize(clipped_probs_active, eps=eps)
 
     # Entropy
     entropy_probs = probs * valid_mask  # entropy regularization should not include the probabilities which we deem invalid
@@ -93,13 +98,28 @@ def calculate_loss(
     chosen_old_log_probs = old_log_probs_active[active_guess_mask]
 
     # Critic loss before advantage normalization
-    critic_losses = advantages_active.pow(2)
+    critic_losses = value_advantages_active.pow(2)
 
-    # Normalize advantages
+    # Normalize advantages per time step
     if norm:
-        mean_adv = advantages_active.mean()
-        std_adv = advantages_active.std() + eps
-        advantages_active = (advantages_active - mean_adv) / std_adv
+        advantages_masked = advantages * active_mask[:, :-1]
+        num_active = active_mask[:, :-1].sum(dim=0, keepdim=True).detach()
+        sum_adv = (advantages_masked).sum(dim=0, keepdim=True)
+        mean_adv = (sum_adv / num_active.clamp_min(eps)).detach()
+        diff_adv = (advantages - mean_adv) * active_mask[:, :-1]
+        std_adv = ((diff_adv.pow(2).sum(dim=0, keepdim=True) / num_active.clamp_min(eps)).sqrt()).detach().clamp_min(eps)
+        zero = torch.zeros_like(mean_adv)
+        one = torch.ones_like(std_adv)
+        mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games
+        std_adv = torch.where(num_active <= 1, one,  std_adv)  # default to 1.0 std when not enough active games
+        advantages_norm = (advantages - mean_adv) / std_adv
+        policy_advantages_active = advantages_norm[active_mask[:, :-1]]
+
+    # # Normalize advantages
+    # if norm:
+    #     mean_adv = advantages_active.mean().detach()
+    #     std_adv = advantages_active.std().detach().clamp_min(eps)
+    #     advantages_active = (advantages_active - mean_adv) / std_adv
 
     # Compute losses
     if clip_advantages:
@@ -107,18 +127,18 @@ def calculate_loss(
         clip_eps = 0.2
         ratio = torch.exp(chosen_log_probs - chosen_old_log_probs) # π_new / π_old
         clipped = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps)
-        surr1 = ratio * advantages_active
-        surr2 = clipped * advantages_active
+        surr1 = ratio * policy_advantages_active
+        surr2 = clipped * policy_advantages_active
         actor_loss = -torch.min(surr1, surr2).mean()
     else:
         ## Plain policy-gradient
-        actor_loss = -(chosen_log_probs * advantages_active).mean()
+        actor_loss = -(chosen_log_probs * policy_advantages_active).mean()
 
     critic_loss = critic_losses.mean()
     entropy_loss = -entropies_active.mean()
     # Normal KL-Div
     kl_reg_loss = F.kl_div(old_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
-    kl_guide_loss = F.kl_div(guide_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
+    kl_guide_loss = F.kl_div(guide_log_probs_active, clipped_log_probs_active, reduction='batchmean', log_target=True)
     kl_best_loss = F.kl_div(best_log_probs_active, log_probs_active, reduction='batchmean', log_target=True)
 
     # Combine losses with coefficients

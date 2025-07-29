@@ -54,7 +54,8 @@ def update_alphabet_states(given_alphabet_states, guess_tensor, target_tensor):
     ## Checking non-matches
     not_exist = ((guessed > 0) & (exist == 0)).expand(*guessed.shape[:-1], 5)  # [batch_size, *, 26, 5]
     found_not = guess_loc & ~target_loc  # [batch_size, *, 26, 5]
-    grey_mask = not_exist | found_not  # [batch_size, *, 26, 5]
+    occupied = green_mask.any(dim=-2, keepdim=True) & ~green_mask  # [batch_size, *, 26, 5]
+    grey_mask = not_exist | found_not | occupied  # [batch_size, *, 26, 5]
     ## Checking if the entire guessed word was equal to the target
     correct = (guess_tensor == target_tensor).all(dim=-1)  # [batch_size, *]
 

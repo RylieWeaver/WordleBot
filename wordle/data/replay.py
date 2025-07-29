@@ -16,10 +16,10 @@ class HardWordBuffer:
     Sampling draws with replacement according to weights.
     """
 
-    def __init__(self, vocab, batch_size=100, capacity=100, replay_ratio=0.1, rho=0.1):
+    def __init__(self, vocab, capacity=100, replay_ratio=0.1, rho=0.1):
         self.vocab = vocab
-        self.batch_size = batch_size
         self.capacity = max(1, capacity)
+        self.vocab_size = len(vocab)
         self.replay_ratio = replay_ratio
         self.rho = rho
         self.init_w = 1.0 / len(vocab)
@@ -72,15 +72,17 @@ class HardWordBuffer:
 
     def sample(self):
         """
-        Sample up to replay_ratio * batch_size indices
+        Sample up to replay_ratio * vocab_size indices
         with replacement according to the current weights.
         """
-        k = int(self.replay_ratio * self.batch_size)
+        k = int(self.replay_ratio * self.vocab_size)
         if k == 0:
             return []
 
         words = list(self.queue)
         weights = np.array([self.entries[w][1] for w in words], dtype=np.float32)
+        if weights.max() != weights.min():  # account for equal weights
+            weights -= weights.min()  # offset by min
         weights /= weights.sum()  # assume already ≥ baseline
 
         chosen = self.rng.choices(words, weights=weights, k=k)
@@ -101,3 +103,18 @@ class HardWordBuffer:
             return [str(w) for w in sorted_words]
 
         return [f"{w}: {self.entries[w][1]:.3f}" for w in sorted_words]
+    
+    def stats(self, word: str):
+        """
+        Return (orig_idx, rank, weight) for `word`.
+        rank = position in weight‑sorted buffer (1 = highest weight).
+        If the word is not yet in the buffer, weight = init_w and rank = None.
+        """
+        if word not in self.entries:
+            idx = self.vocab.index(word)
+            return idx, None, self.init_w
+
+        idx, weight = self.entries[word]
+        # 1‑based rank among current buffer contents
+        rank = 1 + sum(w > weight for _, w in self.entries.values())
+        return idx, rank, weight

@@ -10,9 +10,9 @@
     "Training": {
         "epochs": 1000000,
         "lr": 3e-5,
-        "batch_size": 650,
-        "collect_minibatch_size": 400,
-        "process_minibatch_size": null,
+        "batch_size": 3000,
+        "collect_minibatch_size": 100,
+        "process_minibatch_size": 100,
         "search": {
             "k": 5,
             "r": 4,
@@ -20,38 +20,38 @@
             "test_search": false
         },
         "rewards": {
-            "gamma": 0.10,
-            "lam": 1.00,
+            "gamma": 0.20,
+            "lam": 0.50,
             "m": 3
         },
         "loss": {
             "actor_coef": 1.0,
             "critic_coef": 5.0,
-            "entropy_coef": 0.03,
-            "kl_reg_coef": 0.50,
-            "kl_guide_coef": 0.10,
-            "kl_best_coef": 0.05
+            "entropy_coef": 0.00,
+            "kl_reg_coef": 1.0,
+            "kl_guide_coef": 0.25,
+            "kl_best_coef": 0.10
         },
-        "peek": 0.1,
+        "peek": 0.00,
         "scheduling": {
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,
-            "global_lr_decay_factor": 0.995,
-            "greedify_patience": 3,
-            "warmup_steps": 100,
+            "global_lr_decay_factor": 0.99,
+            "greedify_patience": 1,
+            "warmup_steps": 300,
             "early_stopping_patience": 200
         },
         "log": {
             "enabled": true,
-            "dir": "posttrain_log"
+            "dir": "12latest_posttrain_log"
         }
     },
     "Exploration": {
-        "alpha": 0.0,
-        "min_alpha": 0.0,
-        "alpha_step": 0.01,
-        "temperature": 1.0,
-        "min_temperature": 0.001,
-        "temperature_decay_factor": 0.99
+        "alpha": 0.90,
+        "min_alpha": 0.01,
+        "alpha_step": 0.05,
+        "temperature": 3.00,
+        "min_temperature": 0.01,
+        "temperature_decay_factor": 0.90
     }
 }

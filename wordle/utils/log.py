@@ -23,10 +23,14 @@ def save_checkpoint(actor_critic_net, accuracy, guesses, config, checkpoint_dir,
     print(f"  -> Model saved with accuracy {accuracy:.2%} and guesses {guesses:.2f}")
 
 
-def rest_computer(target_vocab_size):
-    if target_vocab_size >= 2000:
-        time.sleep(20.0)
-    elif target_vocab_size >= 1000:
-        time.sleep(5.0)
+def clear_cache():
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    elif torch.cuda.is_available():
+        torch.cuda.empty_cache()
     else:
-        time.sleep(2.0)
+        print("No GPU available, cannot clear cache.")
+
+
+def rest_computer(size, multiplier=(1.0/400.0)):
+    time.sleep(multiplier * size)

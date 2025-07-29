@@ -12,7 +12,7 @@ import torch.optim as optim
 from wordle.data import words_to_tensor, tensor_to_words, construct_vocab_states, HardWordBuffer
 from wordle.environment import collect_episodes, process_episodes
 from wordle.train import calculate_loss, evolve_learning_params
-from wordle.utils import measure_grad_norms, save_checkpoint, rest_computer
+from wordle.utils import measure_grad_norms, save_checkpoint, clear_cache, rest_computer
 
 
 
@@ -72,7 +72,7 @@ def pretrain(
     total_vocab_states = construct_vocab_states(words_to_tensor(total_vocab).to(device))  # [total_vocab_size, 26, 11]
     target_vocab_states = construct_vocab_states(words_to_tensor(target_vocab).to(device))  # [target_vocab_size, 26, 11]
 
-    replay_loader = HardWordBuffer(target_vocab, batch_size=len(target_vocab), capacity=max(int(0.05*len(target_vocab)), 1), replay_ratio=0.1, rho=0.1)
+    replay_loader = HardWordBuffer(target_vocab, batch_size=len(target_vocab), capacity=max(int(0.05*len(target_vocab)), 1), replay_ratio=(1/len(target_vocab)), rho=0.1)
 
     replay=True
     optimizer = optim.AdamW(actor_critic_net.parameters(), lr=lr, weight_decay=1e-4)
@@ -305,7 +305,7 @@ def pretrain(
                             loss_mb.backward()
 
                             # ---------------- Rest Computer to Prevent Overheating ----------------
-                            rest_computer(len(target_vocab))  # Rest based on target vocab length (proxy for experiment size)
+                            rest_computer(len(mb_idx))  # Rest based on minibatch size
 
                         # -------------- Backprop --------------
                         torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=3.0)
@@ -476,7 +476,7 @@ def posttrain(
     total_vocab_states = construct_vocab_states(words_to_tensor(total_vocab).to(device))  # [total_vocab_size, 26, 11]
     target_vocab_states = construct_vocab_states(words_to_tensor(target_vocab).to(device))  # [target_vocab_size, 26, 11]
 
-    replay_loader = HardWordBuffer(target_vocab, batch_size=batch_size, capacity=max(int(0.05*len(target_vocab)), 1), replay_ratio=0.2, rho=0.1)
+    replay_loader = HardWordBuffer(target_vocab, capacity=len(target_vocab), replay_ratio=2.0, rho=0.03)
 
     replay=True
     optimizer = optim.AdamW(actor_critic_net.parameters(), lr=lr, weight_decay=1e-4)
@@ -495,6 +495,8 @@ def posttrain(
     for p in old_policy_net.parameters():
         p.requires_grad = False
     best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
+    for p in best_policy_net.parameters():
+        p.requires_grad = False
     actor_critic_net.train()
 
     reward_blend_factor = 0.9
@@ -504,13 +506,14 @@ def posttrain(
 
     for epoch in range(1, epochs + 1):
         # ------------------- Generate Epoch Indices -------------------
-        target_vocab_idx = torch.arange(len(target_vocab)).to(device)
+        # target_vocab_idx = torch.randperm(len(target_vocab)).to(device)
+        target_vocab_idx = torch.cat([torch.arange(len(target_vocab)) for _ in range(3)]).to(device)
         if replay:
             replay_idx = torch.tensor(replay_loader.sample()).to(device)
-            epoch_idx = torch.cat((target_vocab_idx, replay_idx), dim=0)  # [(1 + replay_ratio) * batch_size]
+            epoch_idx = torch.cat((target_vocab_idx, replay_idx), dim=0)  # [(1 + replay_ratio) * len(target_vocab)]
+            epoch_idx = epoch_idx[torch.randperm(len(epoch_idx))]
         else:
             epoch_idx = target_vocab_idx
-        epoch_idx = epoch_idx[torch.randperm(len(epoch_idx))]  # Shuffle the indices
 
         # ------------------ Refresh Network for New Rollout ------------------
         old_policy_net.load_state_dict(actor_critic_net.state_dict())
@@ -519,12 +522,12 @@ def posttrain(
         for attempt in range(1, max_attempts + 1):
             try:
                 # -------- Collect Episodes in Minibatches --------
-                alphabet_states_batch, guess_states_batch, expected_values_batch, expected_rewards_batch, rewards_batch, guess_mask_batch, active_mask_batch, valid_mask_batch = [], [], [], [], [], [], [], []
+                alphabet_states_epoch, guess_states_epoch, expected_values_epoch, expected_rewards_epoch, rewards_epoch, guess_mask_epoch, active_mask_epoch, valid_mask_epoch = [], [], [], [], [], [], [], []
                 mb_size = collect_minibatch_size if collect_minibatch_size is not None else len(epoch_idx)
                 num_minibatches = (len(epoch_idx) + mb_size - 1) // mb_size
                 for mb in range(num_minibatches):
                     # Slice minibatch
-                    mb_idx = epoch_idx[mb*mb_size:(mb+1)*mb_size]
+                    mb_idx = epoch_idx[mb * mb_size : (mb + 1) * mb_size]
                     target_tensor = target_vocab_tensor[mb_idx]
                     # Collect minibatch episodes
                     (alphabet_states_minibatch, guess_states_minibatch, _, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
@@ -548,24 +551,24 @@ def posttrain(
                         argmax=False,
                     )
                     # Append to batch lists
-                    alphabet_states_batch.append(alphabet_states_minibatch)
-                    guess_states_batch.append(guess_states_minibatch)
-                    expected_values_batch.append(expected_values_minibatch)
-                    expected_rewards_batch.append(expected_rewards_minibatch)
-                    rewards_batch.append(rewards_minibatch)
-                    guess_mask_batch.append(guess_mask_minibatch)
-                    active_mask_batch.append(active_mask_minibatch)
-                    valid_mask_batch.append(valid_mask_minibatch)
+                    alphabet_states_epoch.append(alphabet_states_minibatch)
+                    guess_states_epoch.append(guess_states_minibatch)
+                    expected_values_epoch.append(expected_values_minibatch)
+                    expected_rewards_epoch.append(expected_rewards_minibatch)
+                    rewards_epoch.append(rewards_minibatch)
+                    guess_mask_epoch.append(guess_mask_minibatch)
+                    active_mask_epoch.append(active_mask_minibatch)
+                    valid_mask_epoch.append(valid_mask_minibatch)
 
                 # Concatenate Batch Results
-                alphabet_states_batch = torch.cat(alphabet_states_batch, dim=0)  # [batch_size, max_guesses+1, 26, 11]
-                guess_states_batch = torch.cat(guess_states_batch, dim=0)  # [batch_size, max_guesses+1, 26, 11]
-                expected_values_batch = torch.cat(expected_values_batch, dim=0)  # [batch_size, max_guesses+1]
-                expected_rewards_batch = torch.cat(expected_rewards_batch, dim=0)  # [batch_size, max_guesses+1]
-                rewards_batch = torch.cat(rewards_batch, dim=0)  # [batch_size, max_guesses+1]
-                guess_mask_batch = torch.cat(guess_mask_batch, dim=0)  # [batch_size, max_guesses+1, vocab_size]
-                active_mask_batch = torch.cat(active_mask_batch, dim=0)  # [batch_size, max_guesses+1]
-                valid_mask_batch = torch.cat(valid_mask_batch, dim=0)  # [batch_size, max_guesses+1]
+                alphabet_states_epoch = torch.cat(alphabet_states_epoch, dim=0)  # [epoch_size, max_guesses+1, 26, 11]
+                guess_states_epoch = torch.cat(guess_states_epoch, dim=0)  # [epoch_size, max_guesses+1, 26, 11]
+                expected_values_epoch = torch.cat(expected_values_epoch, dim=0)  # [epoch_size, max_guesses+1]
+                expected_rewards_epoch = torch.cat(expected_rewards_epoch, dim=0)  # [epoch_size, max_guesses+1]
+                rewards_epoch = torch.cat(rewards_epoch, dim=0)  # [epoch_size, max_guesses+1]
+                guess_mask_epoch = torch.cat(guess_mask_epoch, dim=0)  # [epoch_size, max_guesses+1, vocab_size]
+                active_mask_epoch = torch.cat(active_mask_epoch, dim=0)  # [epoch_size, max_guesses+1]
+                valid_mask_epoch = torch.cat(valid_mask_epoch, dim=0)  # [epoch_size, max_guesses+1]
 
                 break
             # ---------------- Print exception errors and continue ----------------
@@ -575,38 +578,39 @@ def posttrain(
                     traceback.print_exc()
                 else:
                     print(f"Failed to collects episodes after {max_attempts} attempts due to error:\n.")
+                    clear_cache()
                     traceback.print_exc()
                     continue   # out of retries, continue
                 time.sleep(3)   # wait 3 seconds before next try
 
-
-        # ------------------ Wrap episode processing in a try-except to handle lightning strikes ------------------
-        for attempt in range(1, max_attempts + 1):
-            try:
-                rollout_size = 5
-                correct_rollout = []
-                # ---------------- Multiple Passes Per Rollout ----------------
-                for update in range(rollout_size):
-                    epoch_idx = epoch_idx[torch.randperm(len(epoch_idx))]  # Shuffle the indices
-                    num_batches = (len(epoch_idx) + batch_size - 1) // batch_size
+        # ---------------- Multiple Passes Per Rollout ----------------
+        rollout_size = 5
+        for update in range(rollout_size):
+        # ------------------ Wrap episode pass-through in a try-except to handle lightning strikes ------------------
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    correct_rollout = []
+                    rollout_idx = torch.randperm(len(epoch_idx))  # Shuffle the indices
+                    b_size = batch_size if batch_size is not None else len(epoch_idx)
+                    num_batches = (len(rollout_idx) + b_size - 1) // b_size
                     # ------------------ Pass Through Episodes ------------------
                     for batch in range(num_batches):
-                        batch_idx = epoch_idx[batch * batch_size : (batch+1) * batch_size]
+                        batch_idx = rollout_idx[batch * b_size : (batch+1) * b_size]
                         # -------- Process Episodes and Backprop in Minibatches --------
                         mb_size = process_minibatch_size if process_minibatch_size is not None else len(batch_idx)
                         num_minibatches = (len(batch_idx) + mb_size - 1) // mb_size
                         for mb in range(num_minibatches):
                             # Slice minibatch
                             mb_idx = batch_idx[mb * mb_size : (mb + 1) * mb_size]
-                            alphabet_states_minibatch = alphabet_states_batch[mb_idx]
-                            guess_states_minibatch = guess_states_batch[mb_idx]
-                            expected_values_minibatch = expected_values_batch[mb_idx]
-                            expected_rewards_minibatch = expected_rewards_batch[mb_idx]
-                            rewards_minibatch = rewards_batch[mb_idx]
-                            guess_mask_minibatch = guess_mask_batch[mb_idx]
-                            active_mask_minibatch = active_mask_batch[mb_idx]
-                            valid_mask_minibatch = valid_mask_batch[mb_idx]
-                        
+                            alphabet_states_minibatch = alphabet_states_epoch[mb_idx]
+                            guess_states_minibatch = guess_states_epoch[mb_idx]
+                            expected_values_minibatch = expected_values_epoch[mb_idx]
+                            expected_rewards_minibatch = expected_rewards_epoch[mb_idx]
+                            rewards_minibatch = rewards_epoch[mb_idx]
+                            guess_mask_minibatch = guess_mask_epoch[mb_idx]
+                            active_mask_minibatch = active_mask_epoch[mb_idx]
+                            valid_mask_minibatch = valid_mask_epoch[mb_idx]
+
                             # ---------------- Process Episodes Old Policy ----------------
                             with torch.no_grad():
                                 _, old_probs_minibatch, _, _ = process_episodes(
@@ -686,8 +690,7 @@ def posttrain(
                             )
 
                             # ------------------ Normalize Minibatch Losses ------------------
-                            # Batch loss should be invariant to minibatch size
-                            mb_proportion = (len(mb_idx) / len(batch_idx))
+                            mb_proportion = (len(mb_idx) / len(batch_idx))  # make batch loss invariant to minibatch size
                             loss_mb = loss_mb * mb_proportion
                             actor_loss_mb = actor_loss_mb * mb_proportion
                             critic_loss_mb = critic_loss_mb * mb_proportion
@@ -697,7 +700,7 @@ def posttrain(
                             kl_best_loss_mb = kl_best_loss_mb * mb_proportion
 
                             # ---------------- Measure Grad Norms ----------------
-                            if (epoch%1 == 0) and (batch == num_batches - 1) and (mb == num_minibatches - 1) and (update == rollout_size - 1):  # Measure grad norms on the last minibatch of the last update of the last batch of every epochs
+                            if (epoch%3 == 0) and (batch == num_batches - 1) and (mb == num_minibatches - 1) and (update == rollout_size-1):  # Measure grad norms on one minibatch in the rollout
                                 actor_grad_norm, critic_grad_norm, entropy_grad_norm, kl_reg_grad_norm, kl_guide_grad_norm, kl_best_grad_norm = measure_grad_norms(
                                     actor_critic_net,
                                     actor_loss_mb, actor_coef,
@@ -715,7 +718,7 @@ def posttrain(
                             loss_mb.backward()
 
                             # ---------------- Rest Computer to Prevent Overheating ----------------
-                            rest_computer(len(target_vocab))  # Rest based on target vocab length (proxy for experiment size)
+                            rest_computer(len(mb_idx))  # Rest based on minibatch size
 
                         # -------------- Backprop --------------
                         torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=3.0)
@@ -723,31 +726,33 @@ def posttrain(
                         optimizer.zero_grad(set_to_none=True)
                         scheduler.step()
 
-                # ---------------- Correct for a Given Policy ----------------
-                correct_rollout = torch.cat(correct_rollout, dim=0)
+                    break
+                # ---------------- Print exception errors and continue ----------------
+                except RuntimeError as e:
+                    if attempt < max_attempts:
+                        print(f"Retrying episode processing due to error:\n")
+                        traceback.print_exc()
+                    else:
+                        optimizer.zero_grad(set_to_none=True)  # Reset optimizer state
+                        clear_cache()
+                        print(f"Failed to process episodes after {max_attempts} attempts due to error:\n.")
+                        traceback.print_exc()
+                        continue   # out of retries, continue
+                    time.sleep(3)   # wait 3 seconds before next try
 
-                # ---------------- Update Replay ----------------
-                replay_loader.update(epoch_idx, epoch_idx[~correct_rollout.cpu()])
+        # ---------------- Correct for a Given Policy ----------------
+        correct_rollout = torch.cat(correct_rollout, dim=0)
+        rollout_accuracy = torch.mean(correct_rollout.float())
 
-                break
-            # ---------------- Print exception errors and continue ----------------
-            except RuntimeError as e:
-                if attempt < max_attempts:
-                    print(f"Retrying batch {batch} due to error:\n")
-                    traceback.print_exc()
-                else:
-                    optimizer.zero_grad(set_to_none=True)  # Reset optimizer state
-                    correct_rollout = []  # Reset correct rollout
-                    print(f"Failed to process batch {batch} after {max_attempts} attempts due to error:\n.")
-                    traceback.print_exc()
-                    continue   # out of retries, continue
-                time.sleep(3)   # wait 3 seconds before next try
+        # ---------------- Update Replay ----------------
+        rollout_target_idx = epoch_idx[rollout_idx]
+        replay_loader.update(rollout_target_idx, rollout_target_idx[~correct_rollout.cpu()])
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
         target_idx = torch.arange(len(target_vocab)).to(device)
-        size1 = collect_minibatch_size if collect_minibatch_size is not None else len(target_idx)
-        size2 = process_minibatch_size if process_minibatch_size is not None else len(target_idx)
-        test_mb_size = min(size1, size2)
+        mb_size1 = collect_minibatch_size if collect_minibatch_size is not None else len(target_idx)
+        mb_size2 = process_minibatch_size if process_minibatch_size is not None else len(target_idx)
+        test_mb_size = min(mb_size1, mb_size2)
         (test_loss, test_actor_loss, test_critic_loss, test_entropy_loss, test_kl_reg_loss, test_kl_guide_loss, test_kl_best_loss, test_correct, test_accuracy, test_guesses,) = test(
             old_policy_net,
             best_policy_net,
@@ -781,8 +786,8 @@ def posttrain(
 
         # ---------------- Print Training Progress and Write to Run Log ----------------
         log_line = (
-            f"Epoch {epoch}/{epochs} | Acc: {test_accuracy:.2%} | Avg Guesses: {test_guesses:.2f} | "
-            f"alpha={alpha:.2f}, temp={temperature:.2f} | Loss: {test_loss:.4f} | "
+            f"Epoch {epoch}/{epochs} | Test Acc: {test_accuracy:.2%} | Test Avg Guesses: {test_guesses:.2f} | "
+            f"Rollout Accuracy: {rollout_accuracy:.2%} | alpha={alpha:.2f}, temp={temperature:.2f} | "
             f"Actor Loss: {test_actor_loss:.4f} * {actor_coef:.2f}, Critic Loss: {test_critic_loss:.4f} * {critic_coef:.2f}| "
             f"Entropy Loss: {test_entropy_loss:.4f} * {entropy_coef:.2f}, Train KL-Reg Loss: {test_kl_reg_loss:.4f} * {kl_reg_coef:.2f}, "
             f"Test KL-Guide Loss: {test_kl_guide_loss:.4f} * {kl_guide_coef:.2f}, Test KL-Best Loss: {test_kl_best_loss:.4f} * {kl_best_coef:.2f}, "
@@ -845,7 +850,7 @@ def posttrain(
             break
 
         # ---------------- Rest Computer to Prevent Overheating ----------------
-        rest_computer(len(target_vocab))  # Rest based on target vocab length (proxy for experiment size)
+        rest_computer(len(target_vocab))  # Rest based on target vocab length
             
     print('Training complete!')
 
@@ -1019,7 +1024,7 @@ def test(
                     test_samples += len(mb_idx)  # total number of samples
 
                     # ---------------- Rest Computer to Prevent Overheating ----------------
-                    rest_computer(len(target_vocab))  # Rest based on target vocab length (proxy for experiment size)
+                    rest_computer(len(mb_idx))  # Rest based on minibatch size
 
                 break
             # ---------------- Print exception errors and continue ----------------

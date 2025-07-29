@@ -6,7 +6,7 @@ import torch
 
 # Wordle
 from wordle.data import get_vocab, words_to_tensor, tensor_to_words
-from wordle.model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet, TransformerGuessStateNet, DotGuessStateNet
+from wordle.model import ActorCriticNet, SeparatedActorCriticNet, GuessStateNet, TransformerGuessStateNet, DotGuessStateNet, DotGuessStateNet2
 from wordle.train import posttrain
 from wordle.utils import load_config
 
@@ -15,7 +15,7 @@ from wordle.utils import load_config
 def main():
     # Setup
     config = load_config('posttrain_config.json')
-    load_dir = 'pretrain_log'
+    load_dir = '11latest_posttrain_log'
     checkpoint_config = load_config(f'{load_dir}/config.json')
     device = config["Model"]["device"]
 
@@ -35,7 +35,15 @@ def main():
         dropout=config["Model"]["dropout"],
         device=device
     ).to(device)
-    actor_critic_net.load_state_dict(torch.load(f'{load_dir}/best_model.pth', map_location=device, weights_only=True))
+    # actor_critic_net = DotGuessStateNet(
+    #     input_dim=292,  # 292 = 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
+    #     hidden_dim=1024,
+    #     total_vocab_tensor=total_vocab_tensor,
+    #     layers=3,
+    #     dropout=0.0,
+    #     device=device
+    # ).to(device)
+    actor_critic_net.load_state_dict(torch.load(f'{load_dir}/model.pth', map_location=device, weights_only=True))
 
     # Train the network
     posttrain(
