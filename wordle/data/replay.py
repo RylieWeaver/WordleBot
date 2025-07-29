@@ -1,7 +1,5 @@
 # General
-import random
-import numpy as np
-from collections import deque, Counter
+import json
 
 # Torch
 import torch
@@ -10,94 +8,73 @@ import torch
 
 class HardWordBuffer:
     """
-    Hard-word buffer with EMA difficulty weights.
-    Stores at most `capacity` unique words; each has a weight that
-    is EMA-updated toward its miss-rate per episode.
+    Hard-word buffer. Stores the whole target vocabulary with
+    EMA difficulty weights that converge to the miss-rate.
     Sampling draws with replacement according to weights.
     """
 
-    def __init__(self, vocab, batch_size=100, capacity=100, replay_ratio=0.1, rho=0.1):
+    def __init__(self, vocab, replay_ratio=0.1, rho=None):
         self.vocab = vocab
-        self.batch_size = batch_size
-        self.capacity = max(1, capacity)
         self.replay_ratio = replay_ratio
-        self.rho = rho
         self.init_w = 1.0 / len(vocab)
+        self.weights = torch.ones(len(vocab), dtype=torch.float32) * self.init_w
+        self.rho = self.init_w if rho is None else rho
 
-        self.rng = random.Random()
-        self.queue = deque(maxlen=self.capacity)
-        self.entries = {}  # word → (idx, weight)
+    @staticmethod
+    def _flatten(t):
+        return t.view(-1) if isinstance(t, torch.Tensor) else torch.as_tensor(t)
 
-        # Initialize with random subset of the vocab
-        initial_set = self.rng.sample(range(len(vocab)), min(capacity, len(vocab)))
-        for idx in initial_set:
-            word = vocab[idx]
-            self.queue.append(word)
-            self.entries[word] = (idx, self.init_w)
-
-    def tensor_to_list(self, tensor):
-        if isinstance(tensor, torch.Tensor):
-            return tensor.view(-1).tolist()
-        else:
-            return tensor
-
+    @torch.no_grad()
     def update(self, selected_idx, missed_idx):
-        # 1) Turn tensors into lists
-        selected_idx = self.tensor_to_list(selected_idx)
-        missed_idx = self.tensor_to_list(missed_idx)
+        selected = self._flatten(selected_idx)
+        missed = self._flatten(missed_idx)
 
-        # 2) Count tries & corrects
-        tries = Counter(selected_idx)
-        missed = Counter(missed_idx)
+        # Count tries and misses
+        tries_cnt = torch.bincount(selected, minlength=self.weights.numel())
+        miss_cnt = torch.bincount(missed, minlength=self.weights.numel())
 
-        # 3) EMA-update each word that was tried this episode
-        for idx, total in tries.items():
-            miss_rate = missed.get(idx, 0) / total
-            word = self.vocab[idx]
-
-            # Ensure membership (evict smallest if full)
-            if word not in self.entries:
-                if len(self.queue) == self.capacity:
-                    # find & evict the word with the smallest weight
-                    evict = min(self.queue, key=lambda w: self.entries[w][1])
-                    self.queue.remove(evict)
-                    self.entries.pop(evict, None)
-                self.queue.append(word)
-                self.entries[word] = (idx, self.init_w)
-
-            # EMA toward miss_rate
-            idx_old, w_old = self.entries[word]
-            w_new = w_old + self.rho * (miss_rate - w_old)
-            self.entries[word] = (idx_old, w_new)
+        # Update weights with EMA
+        miss_rate = (miss_cnt.float() / tries_cnt.float().clamp(min=1)).cpu()
+        self.weights = self.rho * miss_rate + (1 - self.rho) * self.weights
 
     def sample(self):
-        """
-        Sample up to replay_ratio * batch_size indices
-        with replacement according to the current weights.
-        """
-        k = int(self.replay_ratio * self.batch_size)
+        k = int(self.replay_ratio * len(self.vocab))
         if k == 0:
             return []
 
-        words = list(self.queue)
-        weights = np.array([self.entries[w][1] for w in words], dtype=np.float32)
-        weights /= weights.sum()  # assume already ≥ baseline
+        # Normalize weights to remove minimum and sum to 1
+        if self.weights.min() != self.weights.max():
+            probs = self.weights - self.weights.min()
+        probs = self.weights / self.weights.sum()
 
-        chosen = self.rng.choices(words, weights=weights, k=k)
-        return [self.entries[w][0] for w in chosen]    
+        chosen = torch.multinomial(probs, k, replacement=True)
+        return chosen.tolist()
 
-    def show(self, show_weights=False):
+    def show(self, top_k=10):
         """
         Debug view of the buffer.
         """
-        # Sort words by weight descending
-        sorted_words = sorted(
-            self.queue,
-            key=lambda w: self.entries[w][1],
-            reverse=True
-        )
-
-        if not show_weights:
-            return [str(w) for w in sorted_words]
-
-        return [f"{w}: {self.entries[w][1]:.3f}" for w in sorted_words]
+        sorted_idx = torch.argsort(self.weights, descending=True)[:top_k]
+        return {self.vocab[i]: self.weights[i].item() for i in sorted_idx}
+    
+    def save(self, path):
+        """
+        Save the buffer state to a file.
+        """
+        state = {
+            'vocab': self.vocab,
+            'weights': self.weights.tolist(),
+        }
+        with open(path, 'w') as f:
+            json.dump(state, f)
+    
+    @classmethod
+    def load(cls, path):
+        """
+        Load the buffer state from a file.
+        """
+        with open(path, 'r') as f:
+            buffer_state = json.load(f)
+        buffer = cls(buffer_state['vocab'])
+        buffer.weights = torch.tensor(buffer_state['weights'])
+        return buffer

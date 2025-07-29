@@ -138,7 +138,7 @@ def select_actions_search(
     ## Forward pass to get logits and value
     states = torch.cat([alphabet_states.flatten(start_dim=-2, end_dim=-1), guess_states], dim=-1)  # [batch_size, 26*11 + max_guesses]
     logits, _ = actor_critic_net(states)  # shape: logits=[batch_size, total_vocab_size], value=[batch_size, 1]
-    policy_probs = make_probs(logits, alpha, temperature)  # [batch_size, total_vocab_size]
+    policy_probs, final_probs = make_probs(logits, alpha, temperature)  # [batch_size, total_vocab_size]
     ## Apply inductive bias masking
     policy_probs_masked = (policy_probs.clone() * valid_action_mask.float())  # [batch_size, total_vocab_size]
     ## Normalize the probabilities after masking
@@ -252,4 +252,4 @@ def select_actions_search(
     guess_tensor = total_vocab_tensor[guess_idx]  # [batch_size, 5]
     guess_idx_onehot = F.one_hot(guess_idx, num_classes=logits.shape[-1]).float()  # [batch_size, total_vocab_size]
 
-    return policy_probs, policy_probs_masked, final_probs, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor
+    return policy_probs, final_probs, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor

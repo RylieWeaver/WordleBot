@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 # Wordle
 from wordle.data import tensor_to_words
-from wordle.environment import update_alphabet_states, calculate_entropy_rewards, calculate_entropy_rewards_loop
+from wordle.environment import update_alphabet_states, calculate_entropy_rewards
 
 
 def make_probs(logits, alpha, temperature, valid_mask=None):
@@ -27,13 +27,13 @@ def make_probs(logits, alpha, temperature, valid_mask=None):
 
     # Softmax with temperature
     scaled_logits = logits / temperature
-    probs = F.softmax(scaled_logits, dim=-1)
+    policy_probs = F.softmax(scaled_logits, dim=-1)
 
     # Uniform distribution over valid actions for alpha-mixing
     uniform_probs = valid_mask.float() / valid_mask.sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [batch_size, *, total_vocab_size]
-    final_probs = alpha * uniform_probs + (1 - alpha) * probs
+    final_probs = alpha * uniform_probs + (1 - alpha) * policy_probs
 
-    return final_probs
+    return policy_probs, final_probs
 
 
 def inductive_biases(
@@ -46,31 +46,31 @@ def inductive_biases(
     Apply inductive biases to the guess mask and target mask.
 
     Inputs:
-    - guess_mask_batch: [batch_size, max_guesses+1, total_vocab_size]
-    - target_mask: [batch_size, vocab_size]
-    - total_target_mask: [batch_size, total_vocab_size]
-    - selected_idx: [batch_size] indices of the target words for this batch
+    - guess_mask_batch: [batch_size, *, max_guesses+1, total_vocab_size]
+    - target_mask: [batch_size, *, vocab_size]
+    - total_target_mask: [batch_size, *, total_vocab_size]
+    - selected_idx: [batch_size, *] indices of the target words for this batch
     - last_guess: whether this is the last guess
 
     Returns:
-    - valid_action_mask: [batch_size, total_vocab_size] tensor of valid actions
+    - valid_action_mask: [batch_size, *, total_vocab_size] tensor of valid actions
     """
     # Setup
     device = guess_mask_batch.device
-    valid_action_mask = torch.ones_like(total_target_mask, device=device, dtype=torch.bool)  # [batch_size, total_vocab_size]
+    valid_action_mask = torch.ones_like(total_target_mask, device=device, dtype=torch.bool)  # [batch_size, *, total_vocab_size]
 
     # 1) Do not do repeat guesses
-    guessed = guess_mask_batch.any(dim=1) & ~total_target_mask  # [batch_size, total_vocab_size]
-    valid_action_mask = valid_action_mask & ~guessed  # [batch_size, total_vocab_size]
+    guessed = guess_mask_batch.any(dim=-2) & ~total_target_mask  # [batch_size, *, total_vocab_size]
+    valid_action_mask = valid_action_mask & ~guessed  # [batch_size, *, total_vocab_size]
 
     # 2) Always guess a possible target word for last guess
     if last_guess:
-        valid_action_mask = valid_action_mask & total_target_mask  # [batch_size, total_vocab_size]
+        valid_action_mask = valid_action_mask & total_target_mask  # [batch_size, *, total_vocab_size]
 
     # 3) If there are two or fewer possible targets, choose from those
-    idxs = torch.where((target_mask.float().sum(dim=-1) <= 2))[0]  # [batch_size]
+    idxs = torch.where((target_mask.float().sum(dim=-1) <= 2))[0]  # [batch_size, *]
     if idxs.numel() > 0:
-        valid_action_mask[idxs] = valid_action_mask[idxs] & total_target_mask[idxs]  # [batch_size, total_vocab_size]
+        valid_action_mask[idxs] = valid_action_mask[idxs] & total_target_mask[idxs]  # [batch_size, *, total_vocab_size]
 
     return valid_action_mask
 
@@ -94,8 +94,8 @@ def normalize_probs(probs, valid_action_mask=None):
     zero_rows = (probs.sum(dim=-1) < 1e-8)  # [batch_size]
     if zero_rows.any():
         has_valid = (valid_action_mask[zero_rows].sum(dim=-1, keepdim=True) > 1e-8)  # [zero_rows, 1]
-        uniform = torch.ones_like(probs[zero_rows], device=device, dtype=torch.float32) / probs[zero_rows].sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [zero_rows, total_vocab_size])
-        probs[zero_rows] = torch.where(has_valid, valid_action_mask[zero_rows].float(), uniform)  # [zero_rows, total_vocab_size]
+        uniform = torch.ones_like(probs[zero_rows], device=device, dtype=torch.float32) / probs[zero_rows].sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [zero_rows, *, total_vocab_size]
+        probs[zero_rows] = torch.where(has_valid, valid_action_mask[zero_rows].float(), uniform)  # [zero_rows, *, total_vocab_size]
 
     # Normalize the probabilities
     probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [batch_size, *, total_vocab_size]
@@ -135,7 +135,7 @@ def select_actions(
     - total_vocab_tensor: [total_vocab_size, 5]
     - total_vocab_states: [total_vocab_size, 26, 11]
     - target_vocab_tensor: [target_vocab_size, 5]
-    - guess_mask_batch: [batch_size, max_guesses, *, total_vocab_size]
+    - guess_mask_batch: [batch_size, *, max_guesses, total_vocab_size]
     - target_mask: [batch_size, *, vocab_size]
     - alpha: the uniform probability mixing coefficient
     - temperature: the temperature for softmax
@@ -155,32 +155,32 @@ def select_actions(
     batch_size, *extra_dims, n, l = alphabet_states.shape
     total_vocab_size = len(total_vocab)
     target_vocab_size = len(target_vocab)
-    total_target_mask = torch.cat([torch.zeros([batch_size, *extra_dims, total_vocab_size - target_vocab_size], device=device, dtype=torch.bool), target_mask], dim=-1)  # [batch_size, total_vocab_size]
+    total_target_mask = torch.cat([torch.zeros([batch_size, *extra_dims, total_vocab_size - target_vocab_size], device=device, dtype=torch.bool), target_mask], dim=-1)  # [batch_size, *, total_vocab_size]
 
     # Get valid action mask based on inductive biases
     valid_action_mask = inductive_biases(guess_mask_batch, target_mask, total_target_mask, last_guess=last_guess)
 
     # Forward pass to get logits and value
-    states = torch.cat([alphabet_states.flatten(start_dim=-2, end_dim=-1), guess_states], dim=-1)  # [batch_size, 26*11 + max_guesses]
-    logits, _ = actor_critic_net(states)  # shape: logits=[batch_size, total_vocab_size], value=[batch_size, 1]
-    policy_probs = make_probs(logits, alpha, temperature, valid_action_mask)  # [batch_size, total_vocab_size]
+    states = torch.cat([alphabet_states.flatten(start_dim=-2, end_dim=-1), guess_states], dim=-1)  # [batch_size, *, 26*11 + max_guesses]
+    logits, _ = actor_critic_net(states)  # shape: logits=[batch_size, *, total_vocab_size], value=[batch_size, *, 1]
+    policy_probs, final_probs = make_probs(logits, alpha, temperature, valid_action_mask)  # [batch_size, *, total_vocab_size]
 
-    # Apply inductive bias masking
-    policy_probs_masked = (policy_probs.clone() * valid_action_mask.float())  # [batch_size, total_vocab_size]
-
-    # Normalize the probabilities after masking
+    # Apply inductive bias masking and normalize
+    policy_probs_masked = (policy_probs.clone() * valid_action_mask.float())  # [batch_size, *, total_vocab_size]
+    final_probs_masked = (final_probs.clone() * valid_action_mask.float())  # [batch_size, *, total_vocab_size]
     policy_probs_masked = normalize_probs(policy_probs_masked, valid_action_mask)
+    final_probs_masked = normalize_probs(final_probs_masked, valid_action_mask)
 
     # Select one action based on the updated average values
     if not argmax:
-        *dims, total_vocab_size = policy_probs_masked.shape
-        guess_idx = torch.multinomial(policy_probs_masked.reshape(-1, total_vocab_size) , 1).squeeze(-1)  # [*dims]
+        *dims, total_vocab_size = final_probs_masked.shape
+        guess_idx = torch.multinomial(final_probs_masked.reshape(-1, total_vocab_size) , 1).squeeze(-1)  # [*dims]
         guess_idx = guess_idx.reshape(*dims)  # [batch_size, *]
     else:
         _, guess_idx = torch.topk(policy_probs_masked, k=1, dim=-1) # [batch_size, *, 1]
         guess_idx = guess_idx.squeeze(-1)  # [batch_size, *]
 
-    # Peek the guess word guess word with a probability
+    # Peek the target word with a probability if on the last guess
     if peek > 0.0 and last_guess:
         peek_mask = (torch.rand(batch_size, device=device) < peek)  # apply peek to whole batch element to not add variance to search
         expanded_dim = (batch_size, *([1] * len(extra_dims)))  # get shape to broadcast over
@@ -190,9 +190,9 @@ def select_actions(
 
     # Convert indices to words and one-hot
     guess_tensor = total_vocab_tensor[guess_idx]  # [batch_size, *, 5]
-    guess_idx_onehot = F.one_hot(guess_idx, num_classes=policy_probs_masked.shape[-1]).bool()  # [batch_size, total_vocab_size]
+    guess_idx_onehot = F.one_hot(guess_idx, num_classes=policy_probs_masked.shape[-1]).bool()  # [batch_size, *, total_vocab_size]
 
-    return policy_probs, policy_probs_masked, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor
+    return policy_probs, valid_action_mask, guess_idx, guess_idx_onehot, guess_tensor
 
 
 def simulate_actions(
@@ -204,6 +204,7 @@ def simulate_actions(
         target_vocab_states,
         guess_tensor,
         target_tensor,
+        correct_reward,
     ):
     """
     Simulate one Wordle step
@@ -213,7 +214,7 @@ def simulate_actions(
     - guess_states: [batch_size, *, max_guesses]
     - alphabet_entropy: [batch_size, *]
     - given_target_mask: [batch_size, *, target_vocab_size]
-    - target_vocab_states: [target_vocab_size, *, 26, 11]
+    - target_vocab_states: [*, target_vocab_size, 26, 11]
     - guess_tensor: [batch_size, *, 5]
     - target_tensor: [batch_size, *, 5]
 
@@ -246,17 +247,8 @@ def simulate_actions(
         target_mask,  # [batch_size, *, vocab_size]
         new_alphabet_states,  # [batch_size, *, 26, 11]
         target_vocab_states,  # [*, vocab_size, 26, 11]
-        correct  # [batch_size, *]
+        correct,  # [batch_size, *]
+        correct_reward,
     )  # [batch_size, *], [batch_size, *], [batch_size, *, vocab_size]
-
-    # NOTE: Testing
-    # # Calculate candidate rewards for-loop
-    # rewards, new_alphabet_entropy, new_target_mask = calculate_entropy_rewards_loop(
-    #     alphabet_entropy,   # [batch_size, *, 26, 11]
-    #     target_mask,  # [batch_size, *, vocab_size]
-    #     new_alphabet_states,  # [batch_size, *, 26, 11]
-    #     target_vocab_states,  # [*, vocab_size, 26, 11]
-    #     correct  # [batch_size, *]
-    # )  # [batch_size, *], [batch_size, *], [batch_size, *, vocab_size]
 
     return new_alphabet_states, new_guess_states, new_alphabet_entropy, new_target_mask, values, rewards, correct

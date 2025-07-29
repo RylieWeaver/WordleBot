@@ -54,7 +54,8 @@ def update_alphabet_states(given_alphabet_states, guess_tensor, target_tensor):
     ## Checking non-matches
     not_exist = ((guessed > 0) & (exist == 0)).expand(*guessed.shape[:-1], 5)  # [batch_size, *, 26, 5]
     found_not = guess_loc & ~target_loc  # [batch_size, *, 26, 5]
-    grey_mask = not_exist | found_not  # [batch_size, *, 26, 5]
+    occupied = green_mask.any(dim=-2, keepdim=True) & ~green_mask  # [batch_size, *, 26, 5]
+    grey_mask = not_exist | found_not | occupied  # [batch_size, *, 26, 5]
     ## Checking if the entire guessed word was equal to the target
     correct = (guess_tensor == target_tensor).all(dim=-1)  # [batch_size, *]
 
@@ -70,14 +71,14 @@ def sample_possible_targets(target_mask, m):
     Sample m candidates from the target mask.
 
     Inputs:
-    - target_mask: [batch_size, vocab_size]
+    - target_mask: [batch_size, *, vocab_size]
     - m: number of possible target words to sample for each action
     
     Returns:
-    - idx: [batch_size, m]
+    - idx: [batch_size, *, m]
     """
     # Setup
-    batch_size, vocab_size = target_mask.shape
+    episodes_shape = target_mask.shape[:-1]  # [batch_size, *]
     device = target_mask.device
 
     # Check if we have enough candidates
@@ -85,7 +86,7 @@ def sample_possible_targets(target_mask, m):
     enough = mask_f.sum(dim=-1) >= m
 
     # Sample with replacement if we don't have enough candidates
-    idx = torch.empty((batch_size, m), dtype=torch.long, device=device)
+    idx = torch.empty((*episodes_shape, m), dtype=torch.long, device=device)
     idx[enough] = torch.multinomial(mask_f[enough], m, replacement=False)
     idx[~enough] = torch.multinomial(mask_f[~enough], m, replacement=True)
 
