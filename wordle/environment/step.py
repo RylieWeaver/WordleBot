@@ -119,12 +119,11 @@ def select_actions(
     selected_idx,
     alpha,
     temperature,
-    peek=0.0,
     last_guess=False,
     argmax=False,
 ):
     """
-    For each environment in the batch, search, estimate values/rewards, compute probabilities, and select a word.
+    For each environment in the batch, estimate values/rewards, compute probabilities, and select a word.
 
     Inputs:
     - actor_critic_net: the actor-critic network
@@ -179,14 +178,6 @@ def select_actions(
     else:
         _, guess_idx = torch.topk(policy_probs_masked, k=1, dim=-1) # [batch_size, *, 1]
         guess_idx = guess_idx.squeeze(-1)  # [batch_size, *]
-
-    # Peek the target word with a probability if on the last guess
-    if peek > 0.0 and last_guess:
-        peek_mask = (torch.rand(batch_size, device=device) < peek)  # apply peek to whole batch element to not add variance to search
-        expanded_dim = (batch_size, *([1] * len(extra_dims)))  # get shape to broadcast over
-        peek_mask = peek_mask.view(expanded_dim).expand_as(guess_idx)  # [batch_size, *]
-        target_idx = selected_idx.view(expanded_dim).expand_as(guess_idx).to(device)  # [batch_size, *]
-        guess_idx = torch.where(peek_mask, target_idx, guess_idx)  # replace guesses where peeking
 
     # Convert indices to words and one-hot
     guess_tensor = total_vocab_tensor[guess_idx]  # [batch_size, *, 5]

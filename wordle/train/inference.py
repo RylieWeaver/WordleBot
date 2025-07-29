@@ -24,9 +24,6 @@ def inference(
     target_vocab_tensor,
     total_vocab_states,
     target_vocab_states,
-    k,
-    r,
-    test_search,
     m,
     alpha,
     temperature,
@@ -66,10 +63,6 @@ def inference(
                         temperature,
                         max_guesses,
                         m=m,
-                        r=r,
-                        k=k,
-                        search=test_search,
-                        peek=0.0,
                         argmax=True,
                     )
 

@@ -16,11 +16,6 @@ from .step import (
     simulate_actions,
 )
 
-from .search import (
-    make_search_probs,
-    select_actions_search,
-)
-
 from .episode import (
     collect_episodes,
     process_episodes,

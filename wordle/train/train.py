@@ -34,10 +34,6 @@ def train(
     collect_minibatch_size,
     process_minibatch_size,
     epochs,
-    k,
-    r,
-    train_search,
-    test_search,
     correct_reward,
     gamma,
     lam,
@@ -50,7 +46,6 @@ def train(
     kl_reg_coef,
     kl_guide_coef,
     kl_best_coef,
-    peek,
     alpha,
     min_alpha,
     alpha_step,
@@ -68,6 +63,19 @@ def train(
     config,
 ):
     """
+    Full RL training loop for the WordleBot. Includes episode collection, processing, and gradient steps.
+
+    Import components:
+    - episode collection
+    - episode processing with multiple passes
+    - PPO loss and gradient steps
+    - replay buffer update
+    - test evaluation and checkpointing
+
+    Important notes:
+    - the training loop is designed to handle lightning strikes by wrapping episode collection and processing in try-except blocks
+    - episode collection and preprocessing is done in minibatches to help with memory issues
+    - the best model and replay loader are checkpointed, but not the LR warmup scheduler or anything else
     """
     # ---------------- Setup ----------------
     device = actor_critic_net.device
@@ -142,12 +150,8 @@ def train(
                         alpha,
                         temperature,
                         max_guesses,
-                        k=k,
-                        r=r,
                         correct_reward=correct_reward,
                         m=m,
-                        search=train_search,
-                        peek=peek,
                         argmax=False,
                     )
                     # Append to batch lists
@@ -370,9 +374,6 @@ def train(
             target_vocab_tensor,
             total_vocab_states,
             target_vocab_states,
-            k,
-            r,
-            test_search,
             correct_reward,
             gamma,
             lam,
@@ -482,9 +483,6 @@ def test(
     target_vocab_tensor,
     total_vocab_states,
     target_vocab_states,
-    k,
-    r,
-    test_search,
     correct_reward,
     gamma,
     lam,
@@ -540,10 +538,6 @@ def test(
                         max_guesses,
                         correct_reward=correct_reward,
                         m=m,
-                        r=r,
-                        k=k,
-                        search=test_search,
-                        peek=0.0,
                         argmax=True,
                     )
 

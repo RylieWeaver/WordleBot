@@ -20,12 +20,6 @@
         "replay": {
             "replay_ratio": 0.25
         },
-        "search": {
-            "k": 5,
-            "r": 4,
-            "train_search": false,
-            "test_search": false
-        },
         "rewards": {
             "correct_reward": 0.1,
             "gamma": 0.20,
@@ -42,7 +36,6 @@
             "kl_guide_coef": 0.25,
             "kl_best_coef": 0.10
         },
-        "peek": 0.00,
         "scheduling": {
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,

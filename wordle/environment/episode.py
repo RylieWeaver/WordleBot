@@ -6,7 +6,7 @@ import torch
 
 # Wordle
 from wordle.data import tensor_to_words
-from wordle.environment import sample_possible_targets, make_probs, select_actions, select_actions_search, simulate_actions, normalize_probs
+from wordle.environment import sample_possible_targets, make_probs, select_actions, simulate_actions, normalize_probs
 from wordle.utils import expand_var
 
 
@@ -23,12 +23,8 @@ def collect_episodes(
     alpha,
     temperature,
     max_guesses,
-    k=5,
-    r=5,
     correct_reward=0.1,
     m=3,
-    search=False,
-    peek=0.0,
     argmax=False,
 ):
     """
@@ -46,12 +42,8 @@ def collect_episodes(
     - target_tensor: [batch_size, *, 5] the target word tensor
     - alpha, temperature: random exploration parameters
     - max_guesses: the maximum number of guesses (6 for Wordle)
-    - k: number of candidates to sample for search
-    - r: number of episodes to sample per action for search
     - correct_reward: the reward for a correct guess
     - m: number of candidates to sample for rewards
-    - search: whether to use search or not
-    - peek: the fraction of the guess to be revealed (0.0 = no peek, 1.0 = full peek)
 
     Returns:
     - alphabet_states_batch: Tensor of [batch_size, *, max_guesses+1, 26, 11]
@@ -106,49 +98,22 @@ def collect_episodes(
             guess_states_batch[..., t, :] = guess_states
 
             # Select actions
-            if search:
-                probs, _, valid_mask, guess_idx, guess_idx_onehot, guess_tensor = select_actions_search(
-                    actor_critic_net,
-                    alphabet_states,
-                    guess_states,
-                    alphabet_entropy,
-                    total_vocab,
-                    target_vocab,
-                    total_vocab_tensor,
-                    target_vocab_tensor,
-                    total_vocab_states,
-                    target_vocab_states,
-                    guess_mask_batch,
-                    target_mask,
-                    selected_idx,
-                    active,
-                    max_guesses-t,
-                    alpha,
-                    temperature,
-                    k=k,
-                    r=r,
-                    m=m_cur,
-                    peek=peek,
-                    argmax=argmax,
-                )
-            else:
-                probs, valid_mask, guess_idx, guess_idx_onehot, guess_tensor = select_actions(
-                    actor_critic_net,
-                    alphabet_states,
-                    guess_states,
-                    total_vocab,
-                    target_vocab,
-                    total_vocab_tensor,
-                    total_vocab_states,
-                    guess_mask_batch,
-                    target_mask,
-                    selected_idx,
-                    alpha,
-                    temperature,
-                    peek=peek,
-                    last_guess=(t==max_guesses-1),
-                    argmax=argmax,
-                )
+            probs, valid_mask, guess_idx, guess_idx_onehot, guess_tensor = select_actions(
+                actor_critic_net,
+                alphabet_states,
+                guess_states,
+                total_vocab,
+                target_vocab,
+                total_vocab_tensor,
+                total_vocab_states,
+                guess_mask_batch,
+                target_mask,
+                selected_idx,
+                alpha,
+                temperature,
+                last_guess=(t==max_guesses-1),
+                argmax=argmax,
+            )
 
             # Get rewards and values for the possible target words
             m_cur = min(int(target_mask.sum(dim=-1).max().item()), m)  # sample up to m targets, but not more than available
