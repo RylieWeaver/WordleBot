@@ -32,5 +32,5 @@ def clear_cache():
         print("No GPU available, cannot clear cache.")
 
 
-def rest_computer(size, multiplier=(1.0/400.0)):
+def rest_computer(size, multiplier=(1.0/200.0)):
     time.sleep(multiplier * size)
