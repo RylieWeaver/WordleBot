@@ -68,9 +68,8 @@ def inductive_biases(
         valid_action_mask = valid_action_mask & total_target_mask  # [batch_size, *, total_vocab_size]
 
     # 3) If there are two or fewer possible targets, choose from those
-    idxs = torch.where((target_mask.float().sum(dim=-1) <= 2))[0]  # [batch_size, *]
-    if idxs.numel() > 0:
-        valid_action_mask[idxs] = valid_action_mask[idxs] & total_target_mask[idxs]  # [batch_size, *, total_vocab_size]
+    idxs = torch.where((target_mask.float().sum(dim=-1) <= 2))  # [batch_size, *]
+    valid_action_mask[idxs] = valid_action_mask[idxs] & total_target_mask[idxs]  # [batch_size, *, total_vocab_size]
 
     return valid_action_mask
 
@@ -91,11 +90,11 @@ def normalize_probs(probs, valid_action_mask=None):
 
     # Set the probabilities of the zero rows (should only happen for inactive episodes, but can sometimes happen from very small values in the softmax probability)
     # option 1 is masked probs, option 2 is valid actions, and option 3 is uniform distribution
-    zero_rows = (probs.sum(dim=-1) < 1e-8)  # [batch_size]
-    if zero_rows.any():
-        has_valid = (valid_action_mask[zero_rows].sum(dim=-1, keepdim=True) > 1e-8)  # [zero_rows, 1]
-        uniform = torch.ones_like(probs[zero_rows], device=device, dtype=torch.float32) / probs[zero_rows].sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [zero_rows, *, total_vocab_size]
-        probs[zero_rows] = torch.where(has_valid, valid_action_mask[zero_rows].float(), uniform)  # [zero_rows, *, total_vocab_size]
+    zero_idx = (probs.sum(dim=-1) < 1e-3)  # [batch_size, *]
+    if zero_idx.any():
+        has_valid = (valid_action_mask[zero_idx].sum(dim=-1, keepdim=True) > 1e-8)  # [zero_idx, 1]
+        uniform = torch.ones_like(probs[zero_idx], device=device, dtype=torch.float32) / probs[zero_idx].sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [zero_idx, *, total_vocab_size]
+        probs[zero_idx] = torch.where(has_valid, valid_action_mask[zero_idx].float(), uniform)  # [zero_idx, *, total_vocab_size]
 
     # Normalize the probabilities
     probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-9)  # [batch_size, *, total_vocab_size]
@@ -139,7 +138,6 @@ def select_actions(
     - alpha: the uniform probability mixing coefficient
     - temperature: the temperature for softmax
     - selected_idx: the indices of the target words for this batch
-    - peak: the probability of deterministically guessing the target word
     - argmax: whether to use argmax or sampling
 
     Returns:
@@ -173,7 +171,7 @@ def select_actions(
     # Select one action based on the updated average values
     if not argmax:
         *dims, total_vocab_size = final_probs_masked.shape
-        guess_idx = torch.multinomial(final_probs_masked.reshape(-1, total_vocab_size) , 1).squeeze(-1)  # [*dims]
+        guess_idx = torch.multinomial(final_probs_masked.reshape(-1, total_vocab_size), 1).squeeze(-1)  # [*dims]
         guess_idx = guess_idx.reshape(*dims)  # [batch_size, *]
     else:
         _, guess_idx = torch.topk(policy_probs_masked, k=1, dim=-1) # [batch_size, *, 1]
