@@ -61,15 +61,15 @@ def inductive_biases(
 
     # 1) Do not do repeat guesses
     guessed = guess_mask_batch.any(dim=-2) & ~total_target_mask  # [batch_size, *, total_vocab_size]
-    # valid_action_mask = valid_action_mask & ~guessed  # [batch_size, *, total_vocab_size]
+    valid_action_mask = valid_action_mask & ~guessed  # [batch_size, *, total_vocab_size]
 
     # 2) Always guess a possible target word for last guess
     if last_guess:
         valid_action_mask = valid_action_mask & total_target_mask  # [batch_size, *, total_vocab_size]
 
-    # # 3) If there are two or fewer possible targets, choose from those
-    # idxs = torch.where((target_mask.float().sum(dim=-1) <= 2))  # [batch_size, *]
-    # valid_action_mask[idxs] = valid_action_mask[idxs] & total_target_mask[idxs]  # [batch_size, *, total_vocab_size]
+    # 3) If there are two or fewer possible targets, choose from those
+    idxs = torch.where((target_mask.float().sum(dim=-1) <= 2))  # [batch_size, *]
+    valid_action_mask[idxs] = valid_action_mask[idxs] & total_target_mask[idxs]  # [batch_size, *, total_vocab_size]
 
     return valid_action_mask
 
