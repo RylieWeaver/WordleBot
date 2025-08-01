@@ -33,6 +33,7 @@ def inference(
     """
     device = actor_critic_net.device
     guess_mask_batch = []
+    active_mask_batch = []
     # Dummy exploration variables because we have argmax=True
     alpha = 0.0
     temperature = 1.00
@@ -67,7 +68,8 @@ def inference(
                     )
 
                     # ---------------- Add to Batch ----------------
-                    guess_mask_batch.append(guess_mask_minibatch)
+                    guess_mask_batch.append(guess_mask_minibatch)  # [batch_size, max_guesses, total_vocab_size]
+                    active_mask_batch.append(active_mask_minibatch)  # [batch_size, max_guesses+1]
 
                 break
             # ---------------- Print exception errors and continue ----------------
@@ -84,5 +86,6 @@ def inference(
     # ---------------- Concatenate guess mask results ----------------
     guess_mask_batch = torch.cat(guess_mask_batch, dim=0)  # [batch_size, max_guesses, total_vocab_size]
     guess_idx_batch = torch.argmax(guess_mask_batch.float(), dim=-1)[0]  # [max_guesses]
+    active_mask_batch = torch.cat(active_mask_batch, dim=0)  # [batch_size, max_guesses+1]
 
-    return guess_idx_batch
+    return guess_idx_batch, active_mask_batch

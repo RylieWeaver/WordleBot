@@ -102,7 +102,6 @@ def train(
     best_rollout_guesses = float(max_guesses)
     no_improve_count = 0
 
-    actor_critic_net.eval().train()  # Initalize eval() mode first in case of any buffer inits, then switch to train as expected
     old_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
     for p in old_policy_net.parameters():
         p.requires_grad = False
@@ -121,8 +120,10 @@ def train(
         else:
             epoch_idx = target_vocab_idx
 
-        # ------------------ Refresh Network for New Rollout ------------------
+        # ------------------ Set Networks for New Rollout ------------------
+        actor_critic_net.eval()  # Set the network to evaluation mode during episode collection
         old_policy_net.load_state_dict(actor_critic_net.state_dict())
+        old_policy_net.eval()  # Reset evaluation mode to recompute buffers
 
         # ------------------ Wrap episode collection in a try-except to handle lightning strikes ------------------
         for attempt in range(1, max_attempts + 1):
@@ -188,6 +189,7 @@ def train(
                 time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Multiple Passes Per Rollout ----------------
+        actor_critic_net.train()  # set to train mode for episode processing
         for update in range(rollout_size):
         # ------------------ Wrap episode pass-through in a try-except to handle lightning strikes ------------------
             for attempt in range(1, max_attempts + 1):
@@ -253,7 +255,6 @@ def train(
                                 )
 
                             # ---------------- Process Episodes Current Net ----------------
-                            actor_critic_net.train()
                             advantages_minibatch, probs_minibatch, guide_probs_minibatch, correct_minibatch = process_episodes(
                                 actor_critic_net,
                                 alphabet_states_minibatch,
@@ -406,7 +407,8 @@ def train(
         replay = (test_accuracy < 1.0)  # use replay if any guesses were incorrect
         if (test_accuracy > best_test_accuracy or (test_accuracy == best_test_accuracy and test_guesses < best_test_guesses)):
             print(f'  -> New best model found')
-            best_policy_net = copy.deepcopy(actor_critic_net).eval().to(device)
+            best_policy_net.load_state_dict(actor_critic_net.state_dict())
+            best_policy_net.eval()  # Reset evaluation mode to recompute buffers
             if checkpointing:
                 save_checkpoint(actor_critic_net, test_accuracy, test_guesses, config, log_dir)
                 replay_loader.save('replay_loader.json')

@@ -56,7 +56,6 @@ def collect_episodes(
     - active_mask_batch: Tensor of [batch_size, *, max_guesses+1] (1 = valid step, 0 = after done)
     - valid_mask_batch: Tensor of [batch_size, *, max_guesses, total_vocab_size] (1 = valid action, 0 = invalid action)
     """
-    actor_critic_net.eval()  # Set the network to evaluation mode during episode collection
     with torch.no_grad():
         # Setup
         device = actor_critic_net.device
