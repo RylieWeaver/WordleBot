@@ -166,7 +166,7 @@ class DotGuessStateNet(nn.Module):
         )
 
         # Initialize guess keys
-        self.register_buffer("guess_k_static", torch.empty(0))   # will hold cached keys in eval
+        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, hidden_dim]))   # will hold cached keys in eval
 
     def _build_guess_k(self):
         # Input embedding
@@ -252,7 +252,7 @@ class DotGuessStateNet2(nn.Module):
         )
 
         # Initialize guess keys
-        self.register_buffer("guess_k_static", torch.empty(0))   # will hold cached keys in eval
+        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, hidden_dim]))   # will hold cached keys in eval
 
     def _build_guess_k(self):
         # Input embedding
