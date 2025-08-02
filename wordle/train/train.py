@@ -189,7 +189,7 @@ def train(
                 time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Multiple Passes Per Rollout ----------------
-        actor_critic_net.train()  # set to train mode for episode processing
+        actor_critic_net.train()  # set to train mode for episode
         for update in range(rollout_size):
         # ------------------ Wrap episode pass-through in a try-except to handle lightning strikes ------------------
             for attempt in range(1, max_attempts + 1):
@@ -417,7 +417,7 @@ def train(
         # Check improvement on test loss
         if ((test_actor_loss < best_test_actor_loss) or (test_critic_loss < best_test_critic_loss) or \
             (test_accuracy > best_test_accuracy) or (test_accuracy == best_test_accuracy and test_guesses < best_test_guesses) or \
-            (rollout_accuracy > best_rollout_accuracy) or (rollout_guesses < best_rollout_guesses)):
+            (rollout_accuracy > best_rollout_accuracy) or (rollout_accuracy == best_rollout_accuracy and rollout_guesses < best_rollout_guesses)):
             no_improve_count = 0
         else:
             no_improve_count += 1
