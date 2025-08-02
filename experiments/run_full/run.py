@@ -17,7 +17,7 @@ def main():
     # Setup
     config = load_config('config.json')
     device = config["Model"]["device"]
-    # load_dir = 'log_dir'
+    load_dir = 'log_dir'
     # checkpoint_config = load_config(f'{load_dir}/config.json')
     checkpoint_config = config
 
@@ -29,7 +29,7 @@ def main():
 
     # Replay buffer
     replay_loader = HardWordBuffer(target_vocab, replay_ratio=config["Training"]["replay"]["replay_ratio"])
-    # replay_loader.load('replay_buffer.json')
+    replay_loader.load(f'{load_dir}/replay_buffer.json')
 
     # Model
     total_vocab_tensor = words_to_tensor(total_vocab).to(device)  # [total_vocab_size, 5]

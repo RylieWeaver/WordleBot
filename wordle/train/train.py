@@ -411,7 +411,7 @@ def train(
             best_policy_net.eval()  # Reset evaluation mode to recompute buffers
             if checkpointing:
                 save_checkpoint(actor_critic_net, test_accuracy, test_guesses, config, log_dir)
-                replay_loader.save('replay_loader.json')
+                replay_loader.save(f'{log_dir}/replay_loader.json')
 
         # ---------------- Evolve Learning ----------------
         # Check improvement on test loss
