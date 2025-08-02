@@ -29,7 +29,7 @@ def main():
 
     # Replay buffer
     replay_loader = HardWordBuffer(target_vocab, replay_ratio=config["Training"]["replay"]["replay_ratio"])
-    # replay_loader.load(f'{load_dir}/replay_buffer.json')
+    # replay_loader.load(f'{load_dir}/replay_loader.json')
 
     # Model
     total_vocab_tensor = words_to_tensor(total_vocab).to(device)  # [total_vocab_size, 5]
