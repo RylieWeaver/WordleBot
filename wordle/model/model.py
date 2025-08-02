@@ -138,6 +138,7 @@ class DotGuessStateNet(nn.Module):
         self.state_layers = nn.ModuleList()
         self.guess_layers = nn.ModuleList()
         self.hidden_dim = hidden_dim
+        self.vocab_size = total_vocab_tensor.shape[0]
         guess_dim = max(hidden_dim // 16, 16)
         self.guess_dim = guess_dim
         self.act = nn.SiLU()
