@@ -22,7 +22,7 @@ class HardWordBuffer:
 
     @staticmethod
     def _flatten(t):
-        return t.view(-1) if isinstance(t, torch.Tensor) else torch.as_tensor(t)
+        return t.reshape(-1) if isinstance(t, torch.Tensor) else torch.as_tensor(t)
 
     @torch.no_grad()
     def update(self, selected_idx, missed_idx):

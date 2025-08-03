@@ -119,6 +119,7 @@ def train(
             epoch_idx = torch.cat((target_vocab_idx, replay_idx), dim=0)  # [(1 + replay_ratio) * len(target_vocab)]
         else:
             epoch_idx = target_vocab_idx
+        epoch_idx = expand_var(epoch_idx, dim=-1, size=target_repeats)  # [epoch_size, target_repeats]
 
         # ------------------ Set Networks for New Rollout ------------------
         actor_critic_net.eval()  # Set the network to evaluation mode during episode collection
@@ -129,16 +130,15 @@ def train(
         for attempt in range(1, max_attempts + 1):
             try:
                 # -------- Collect Episodes in Minibatches --------
-                alphabet_states_epoch, guess_states_epoch, expected_values_epoch, expected_rewards_epoch, rewards_epoch, guess_mask_epoch, active_mask_epoch, valid_mask_epoch = [], [], [], [], [], [], [], []
+                alphabet_states_epoch, guess_states_epoch, correct_epoch, expected_values_epoch, expected_rewards_epoch, rewards_epoch, guess_mask_epoch, active_mask_epoch, valid_mask_epoch = [], [], [], [], [], [], [], [], []
                 mb_size = collect_minibatch_size if collect_minibatch_size is not None else len(epoch_idx)
                 num_minibatches = (len(epoch_idx) + mb_size - 1) // mb_size
                 for mb in range(num_minibatches):
                     # Slice minibatch
                     mb_idx = epoch_idx[mb * mb_size : (mb + 1) * mb_size]
-                    target_tensor = target_vocab_tensor[mb_idx]  # [mb_size, 5]
-                    target_tensor = target_tensor.unsqueeze(1).expand(-1, target_repeats, -1)  # [mb_size, target_repeats, 5]
+                    target_tensor = target_vocab_tensor[mb_idx]  # [mb_size, target_repeats, 5]
                     # Collect minibatch episodes
-                    (alphabet_states_minibatch, guess_states_minibatch, _, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
+                    (alphabet_states_minibatch, guess_states_minibatch, _, correct_minibatch, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
                         actor_critic_net,
                         total_vocab,
                         target_vocab,
@@ -158,6 +158,7 @@ def train(
                     # Append to batch lists
                     alphabet_states_epoch.append(alphabet_states_minibatch)
                     guess_states_epoch.append(guess_states_minibatch)
+                    correct_epoch.append(correct_minibatch)
                     expected_values_epoch.append(expected_values_minibatch)
                     expected_rewards_epoch.append(expected_rewards_minibatch)
                     rewards_epoch.append(rewards_minibatch)
@@ -168,6 +169,7 @@ def train(
                 # Concatenate Batch Results
                 alphabet_states_epoch = torch.cat(alphabet_states_epoch, dim=0)  # [epoch_size, target_repeats, max_guesses+1, 26, 11]
                 guess_states_epoch = torch.cat(guess_states_epoch, dim=0)  # [epoch_size, target_repeats, max_guesses+1, 26, 11]
+                correct_epoch = torch.cat(correct_epoch, dim=0)  # [epoch_size, target_repeats]
                 expected_values_epoch = torch.cat(expected_values_epoch, dim=0)  # [epoch_size, target_repeats, max_guesses+1]
                 expected_rewards_epoch = torch.cat(expected_rewards_epoch, dim=0)  # [epoch_size, target_repeats, max_guesses+1]
                 rewards_epoch = torch.cat(rewards_epoch, dim=0)  # [epoch_size, target_repeats, max_guesses+1]
@@ -188,13 +190,21 @@ def train(
                     continue   # out of retries, continue
                 time.sleep(3)   # wait 3 seconds before next try
 
+        # ---------------- Correct for a Given Episode Collection ----------------
+        rollout_accuracy = torch.mean(correct_epoch.float()).item()  # Average accuracy of the rollout
+        num_guesses = active_mask_epoch[..., :-1].float().sum()
+        num_games = correct_epoch.flatten().size(0)
+        rollout_guesses = (num_guesses / num_games).item()  # Average number of guesses taken in the rollout
+
+        # ---------------- Update Replay ----------------
+        replay_loader.update(epoch_idx, epoch_idx[~correct_epoch.cpu()])
+
         # ---------------- Multiple Passes Per Rollout ----------------
         actor_critic_net.train()  # set to train mode for episode
         for update in range(rollout_size):
         # ------------------ Wrap episode pass-through in a try-except to handle lightning strikes ------------------
             for attempt in range(1, max_attempts + 1):
                 try:
-                    correct_rollout, active_mask_rollout = [], []
                     rollout_idx = torch.randperm(len(epoch_idx))  # Shuffle the indices
                     b_size = batch_size if batch_size is not None else len(epoch_idx)
                     num_batches = (len(rollout_idx) + b_size - 1) // b_size
@@ -218,7 +228,7 @@ def train(
 
                             # ---------------- Process Episodes Old Policy ----------------
                             with torch.no_grad():
-                                _, old_probs_minibatch, _, _ = process_episodes(
+                                _, old_probs_minibatch, _ = process_episodes(
                                     old_policy_net,
                                     alphabet_states_minibatch,
                                     guess_states_minibatch,
@@ -237,7 +247,7 @@ def train(
 
                             # ---------------- Process Episodes Best Checkpoint ----------------
                             with torch.no_grad():
-                                _, best_probs_minibatch, _, _ = process_episodes(
+                                _, best_probs_minibatch, _ = process_episodes(
                                     best_policy_net,
                                     alphabet_states_minibatch,
                                     guess_states_minibatch,
@@ -255,7 +265,7 @@ def train(
                                 )
 
                             # ---------------- Process Episodes Current Net ----------------
-                            advantages_minibatch, probs_minibatch, guide_probs_minibatch, correct_minibatch = process_episodes(
+                            advantages_minibatch, probs_minibatch, guide_probs_minibatch = process_episodes(
                                 actor_critic_net,
                                 alphabet_states_minibatch,
                                 guess_states_minibatch,
@@ -317,9 +327,6 @@ def train(
                                 print(f"Actor grad norm: {actor_grad_norm:.4f}, Critic grad norm: {critic_grad_norm:.4f}, Entropy grad norm: {entropy_grad_norm:.4f}, KL-Reg grad norm: {kl_reg_grad_norm:.4f}, KL-Guide grad norm: {kl_guide_grad_norm:.4f}, KL-Best grad norm: {kl_best_grad_norm:.4f}")
                             
                             # ------------------ Accumulate Minibatch Results ------------------
-                            if update == rollout_size - 1:  # Only accumulate results on the last update of the rollout (the correct values will be the same for all updates)
-                                correct_rollout.append(correct_minibatch)
-                                active_mask_rollout.append(active_mask_minibatch)
                             loss_mb.backward()
 
                             # ---------------- Rest Computer to Prevent Overheating ----------------
@@ -344,18 +351,6 @@ def train(
                         traceback.print_exc()
                         continue   # out of retries, continue
                     time.sleep(3)   # wait 3 seconds before next try
-
-        # ---------------- Correct for a Given Policy ----------------
-        correct_rollout = torch.cat(correct_rollout, dim=0).flatten()  # [epoch_size * target_repeats]
-        active_mask_rollout = torch.cat(active_mask_rollout, dim=0)[..., :-1]  # [epoch_size * target_repeats, max_guesses]
-        rollout_accuracy = torch.mean(correct_rollout.float()).item()  # Average accuracy of the rollout
-        rollout_guesses = active_mask_rollout.float().sum(dim=-1).mean().item()  # Average number of guesses taken in the rollout
-
-        # ---------------- Update Replay ----------------
-        epoch_idx_repeated = expand_var(epoch_idx, dim=-1, size=target_repeats).flatten()  # [epoch_size * target_repeats]
-        rollout_idx_repeated = expand_var(rollout_idx, dim=-1, size=target_repeats).flatten()  # [epoch_size * target_repeats]
-        rollout_target_idx = epoch_idx_repeated[rollout_idx_repeated]  # [epoch_size * target_repeats]
-        replay_loader.update(rollout_target_idx, rollout_target_idx[~correct_rollout.cpu()])
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
         target_idx = torch.arange(len(target_vocab)).to(device)
@@ -506,7 +501,7 @@ def test(
     device = actor_critic_net.device
     test_loss = test_actor_loss = test_critic_loss = test_entropy_loss = test_kl_reg_loss = test_kl_guide_loss = test_kl_best_loss = 0.0
     test_guesses = test_samples = 0.0
-    test_correct = []
+    test_correct, test_active_mask = [], []
     # Dummy exploration variables because we have argmax=True
     alpha = 0.0
     temperature = 1.00
@@ -525,7 +520,7 @@ def test(
                     mb_idx = target_idx[mb * minibatch_size : (mb + 1) * minibatch_size]
                     target_tensor = target_vocab_tensor[mb_idx]
                     # -------- Run episodes --------
-                    (alphabet_states_minibatch, guess_states_minibatch, _, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
+                    (alphabet_states_minibatch, guess_states_minibatch, _, correct_minibatch, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
                         actor_critic_net,
                         total_vocab,
                         target_vocab,
@@ -544,7 +539,7 @@ def test(
                     )
 
                     # ---------------- Process Episodes Old Net ----------------
-                    _, old_probs_minibatch, _, _ = process_episodes(
+                    _, old_probs_minibatch, _ = process_episodes(
                         old_policy_net,
                         alphabet_states_minibatch,
                         guess_states_minibatch,
@@ -562,7 +557,7 @@ def test(
                     )
 
                     # ---------------- Process Episodes Best Checkpoint ----------------
-                    _, best_probs_minibatch, _, _ = process_episodes(
+                    _, best_probs_minibatch, _ = process_episodes(
                         best_policy_net,
                         alphabet_states_minibatch,
                         guess_states_minibatch,
@@ -580,7 +575,7 @@ def test(
                     )
 
                     # ---------------- Process Episodes ----------------
-                    advantages_minibatch, probs_minibatch, guide_probs_minibatch, correct_minibatch = process_episodes(
+                    advantages_minibatch, probs_minibatch, guide_probs_minibatch = process_episodes(
                         actor_critic_net,
                         alphabet_states_minibatch,
                         guess_states_minibatch,
@@ -627,8 +622,7 @@ def test(
                     test_kl_guide_loss = test_kl_guide_loss + kl_guide_loss_mb.item() * mb_proportion
                     test_kl_best_loss = test_kl_best_loss + kl_best_loss_mb.item() * mb_proportion
                     test_correct.append(correct_minibatch)
-                    test_guesses += (active_mask_minibatch[:, :-1].sum(dim=-1).sum(dim=-1)).item()
-                    test_samples += len(mb_idx)  # total number of samples
+                    test_active_mask.append(active_mask_minibatch)
 
                     # ---------------- Rest Computer to Prevent Overheating ----------------
                     rest_computer(len(mb_idx))  # Rest based on minibatch size
@@ -646,11 +640,14 @@ def test(
                 time.sleep(3)   # wait 3 seconds before next try
 
     # ---------------- Concatenate minibatch results ----------------
-    test_correct = torch.cat(test_correct, dim=0)
+    test_correct = torch.cat(test_correct, dim=0)  # [epoch_size, target_repeats]
+    test_active_mask = torch.cat(test_active_mask, dim=0)  # [epoch_size, target_repeats, max_guesses+1]
 
     # Calculate metrics
-    test_accuracy = (test_correct.sum().item() / test_samples)
-    test_guesses = (test_guesses / test_samples)  # average guesses per sample
+    test_accuracy = torch.mean(test_correct.float()).item()  # Average accuracy of the test
+    num_guesses = test_active_mask[..., :-1].float().sum()
+    num_games = test_correct.flatten().size(0)
+    test_guesses = (num_guesses / num_games).item()  # Average number of guesses taken in the test
 
     return (
         test_loss,

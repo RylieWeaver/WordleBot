@@ -161,6 +161,7 @@ def collect_episodes(
             alphabet_states_batch,
             guess_states_batch,
             probs_batch,
+            ~active,
             expected_values_batch,
             expected_rewards_batch,
             rewards_batch,
@@ -237,7 +238,4 @@ def process_episodes(
     guide_probs_batch = (policy_probs_batch.clone() * valid_mask_batch.float())  # [batch_size, *, max_guesses, total_vocab_size]
     guide_probs_batch = normalize_probs(guide_probs_batch, valid_mask_batch)
 
-    # Compute the episodes with correct guesses via the mask
-    correct = ((active_mask_batch[..., :-1] == 0).any(dim=-1))  # the last column should be zeros anyways
-
-    return advantages_batch, policy_probs_batch, guide_probs_batch, correct
+    return advantages_batch, policy_probs_batch, guide_probs_batch
