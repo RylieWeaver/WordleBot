@@ -303,16 +303,6 @@ def train(
                                 clip_eps=clip_eps,
                             )
 
-                            # ------------------ Normalize Minibatch Losses ------------------
-                            mb_proportion = (len(mb_idx) / len(batch_idx))  # make batch loss invariant to minibatch size
-                            loss_mb = loss_mb * mb_proportion
-                            actor_loss_mb = actor_loss_mb * mb_proportion
-                            critic_loss_mb = critic_loss_mb * mb_proportion
-                            entropy_loss_mb = entropy_loss_mb * mb_proportion
-                            kl_reg_loss_mb = kl_reg_loss_mb * mb_proportion
-                            kl_guide_loss_mb = kl_guide_loss_mb * mb_proportion
-                            kl_best_loss_mb = kl_best_loss_mb * mb_proportion
-
                             # ---------------- Measure Grad Norms ----------------
                             if (epoch%3 == 0) and (batch == num_batches - 1) and (mb == num_minibatches - 1) and (update == rollout_size-1):  # Measure grad norms on one minibatch in the rollout
                                 actor_grad_norm, critic_grad_norm, entropy_grad_norm, kl_reg_grad_norm, kl_guide_grad_norm, kl_best_grad_norm = measure_grad_norms(
@@ -326,6 +316,16 @@ def train(
                                 )
                                 print(f"Actor grad norm: {actor_grad_norm:.4f}, Critic grad norm: {critic_grad_norm:.4f}, Entropy grad norm: {entropy_grad_norm:.4f}, KL-Reg grad norm: {kl_reg_grad_norm:.4f}, KL-Guide grad norm: {kl_guide_grad_norm:.4f}, KL-Best grad norm: {kl_best_grad_norm:.4f}")
                             
+                            # ------------------ Normalize Minibatch Losses ------------------
+                            mb_proportion = (len(mb_idx) / len(batch_idx))  # make batch loss invariant to minibatch size
+                            loss_mb = loss_mb * mb_proportion
+                            actor_loss_mb = actor_loss_mb * mb_proportion
+                            critic_loss_mb = critic_loss_mb * mb_proportion
+                            entropy_loss_mb = entropy_loss_mb * mb_proportion
+                            kl_reg_loss_mb = kl_reg_loss_mb * mb_proportion
+                            kl_guide_loss_mb = kl_guide_loss_mb * mb_proportion
+                            kl_best_loss_mb = kl_best_loss_mb * mb_proportion
+
                             # ------------------ Accumulate Minibatch Results ------------------
                             loss_mb.backward()
 
