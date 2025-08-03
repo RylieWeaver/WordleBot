@@ -69,12 +69,12 @@ class HardWordBuffer:
             json.dump(state, f)
     
     @classmethod
-    def load(cls, path):
+    def load(cls, path, **kwargs):
         """
         Load the buffer state from a file.
         """
         with open(path, 'r') as f:
             buffer_state = json.load(f)
-        buffer = cls(buffer_state['vocab'])
+        buffer = cls(buffer_state['vocab'], **kwargs)
         buffer.weights = torch.tensor(buffer_state['weights'])
         return buffer
