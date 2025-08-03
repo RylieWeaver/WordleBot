@@ -411,8 +411,7 @@ def train(
         # ---------------- Evolve Learning ----------------
         # Check improvement on test loss
         if ((test_actor_loss < best_test_actor_loss) or (test_critic_loss < best_test_critic_loss) or \
-            (test_accuracy > best_test_accuracy) or (test_accuracy == best_test_accuracy and test_guesses < best_test_guesses) or \
-            (rollout_accuracy > best_rollout_accuracy) or (rollout_accuracy == best_rollout_accuracy and rollout_guesses < best_rollout_guesses)):
+            (test_accuracy > best_test_accuracy) or (test_accuracy == best_test_accuracy and test_guesses < best_test_guesses)):
             no_improve_count = 0
         else:
             no_improve_count += 1
