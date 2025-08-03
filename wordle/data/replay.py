@@ -42,10 +42,12 @@ class HardWordBuffer:
         if k == 0:
             return []
 
-        # Normalize weights to remove minimum and sum to 1
+        # Normalize weights to remove baseline and sum to 1
         if self.weights.min() != self.weights.max():
             probs = self.weights - self.weights.min()
-        probs = self.weights / self.weights.sum()
+        else:
+            probs = self.weights
+        probs = probs / probs.sum()
 
         chosen = torch.multinomial(probs, k, replacement=True)
         return chosen.tolist()
