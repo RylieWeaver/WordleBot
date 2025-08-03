@@ -13,12 +13,12 @@ class HardWordBuffer:
     Sampling draws with replacement according to weights.
     """
 
-    def __init__(self, vocab, replay_ratio=0.1, rho=None):
+    def __init__(self, vocab, replay_ratio=0.1, rho=0.05):
         self.vocab = vocab
         self.replay_ratio = replay_ratio
         self.init_w = 1.0 / len(vocab)
         self.weights = torch.ones(len(vocab), dtype=torch.float32) * self.init_w
-        self.rho = self.init_w if rho is None else rho
+        self.rho = rho
 
     @staticmethod
     def _flatten(t):
