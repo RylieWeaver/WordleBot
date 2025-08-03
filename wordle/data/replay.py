@@ -55,7 +55,7 @@ class HardWordBuffer:
         Debug view of the buffer.
         """
         sorted_idx = torch.argsort(self.weights, descending=True)[:top_k]
-        return {self.vocab[i]: round(self.weights[i].item(), 3) for i in sorted_idx}
+        return {self.vocab[i]: round(self.weights[i].item(), 5) for i in sorted_idx}
     
     def save(self, path):
         """
