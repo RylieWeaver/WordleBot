@@ -500,7 +500,7 @@ def test(
     device = actor_critic_net.device
     test_loss = test_actor_loss = test_critic_loss = test_entropy_loss = test_kl_reg_loss = test_kl_guide_loss = test_kl_best_loss = 0.0
     test_guesses = test_samples = 0.0
-    test_correct, test_active_mask = [], []
+    test_correct, guess_mask_batch, test_active_mask = [], [], []
     # Dummy exploration variables because we have argmax=True
     alpha = 0.0
     temperature = 1.00
@@ -621,6 +621,7 @@ def test(
                     test_kl_guide_loss = test_kl_guide_loss + kl_guide_loss_mb.item() * mb_proportion
                     test_kl_best_loss = test_kl_best_loss + kl_best_loss_mb.item() * mb_proportion
                     test_correct.append(correct_minibatch)
+                    guess_mask_batch.append(guess_mask_minibatch)
                     test_active_mask.append(active_mask_minibatch)
 
                     # ---------------- Rest Computer to Prevent Overheating ----------------
@@ -640,6 +641,7 @@ def test(
 
     # ---------------- Concatenate minibatch results ----------------
     test_correct = torch.cat(test_correct, dim=0)  # [epoch_size, target_repeats]
+    guess_mask_batch = torch.cat(guess_mask_batch, dim=0)  # [epoch_size, target_repeats, max_guesses+1, vocab_size]
     test_active_mask = torch.cat(test_active_mask, dim=0)  # [epoch_size, target_repeats, max_guesses+1]
 
     # Calculate metrics
