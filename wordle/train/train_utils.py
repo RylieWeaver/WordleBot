@@ -2,6 +2,9 @@
 import torch
 import torch.nn.functional as F
 
+# Wordle
+from wordle.utils import op_except
+
 
 def log_normalize(probs, eps=1e-12, clamp=1e-12):
     probs = probs + eps  # Avoid log(0)
@@ -97,11 +100,11 @@ def calculate_loss(
     # # Normalize advantages per time step
     # if norm:
     #     advantages_masked = advantages * active_mask[..., :-1]
-    #     num_active = active_mask[..., :-1].sum(dim=0, keepdim=True).detach()
-    #     sum_adv = (advantages_masked).sum(dim=0, keepdim=True)
+    #     num_active = op_except(active_mask[..., :-1], except_dims=[0,1], type="sum", keepdim=True)
+    #     sum_adv = op_except(advantages_masked, except_dims=-1, type="sum", keepdim=True)
     #     mean_adv = (sum_adv / num_active.clamp_min(eps)).detach()
     #     diff_adv = (advantages - mean_adv) * active_mask[..., :-1]
-    #     std_adv = ((diff_adv.pow(2).sum(dim=0, keepdim=True) / num_active.clamp_min(eps)).sqrt()).detach().clamp_min(eps)
+    #     std_adv = ((op_except(diff_adv.pow(2), except_dims=-1, type="sum", keepdim=True)) / num_active.clamp_min(eps)).sqrt()).detach().clamp_min(eps)
     #     zero = torch.zeros_like(mean_adv)
     #     one = torch.ones_like(std_adv)
     #     mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games

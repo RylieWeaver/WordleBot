@@ -1,4 +1,3 @@
-from .debug import measure_grad_norms
 from .configuration import load_config
-from .log import save_checkpoint, clear_cache, rest_computer
-from .shape import expand_var
+from .log import measure_grad_norms, save_checkpoint, clear_cache, rest_computer
+from .torch_ops import expand_var, op_except
