@@ -196,8 +196,8 @@ def train(
         num_games = correct_epoch.flatten().size(0)
         rollout_guesses = (num_guesses / num_games).item()  # Average number of guesses taken in the rollout
 
-        # ---------------- Update Replay ----------------
-        replay_loader.update(epoch_idx, epoch_idx[~correct_epoch.cpu()])
+        # # ---------------- Update Replay ----------------
+        # replay_loader.update(epoch_idx, epoch_idx[~correct_epoch.cpu()])
 
         # ---------------- Multiple Passes Per Rollout ----------------
         actor_critic_net.train()  # set to train mode for episode
@@ -353,9 +353,9 @@ def train(
                     time.sleep(3)   # wait 3 seconds before next try
 
         # ---------------- Evaluate Learning on Full Vocab ----------------
-        target_idx = torch.arange(len(target_vocab)).to(device)
-        mb_size1 = collect_minibatch_size if collect_minibatch_size is not None else len(target_idx)
-        mb_size2 = process_minibatch_size if process_minibatch_size is not None else len(target_idx)
+        test_idx = torch.arange(len(target_vocab)).to(device)
+        mb_size1 = collect_minibatch_size if collect_minibatch_size is not None else len(test_idx)
+        mb_size2 = process_minibatch_size if process_minibatch_size is not None else len(test_idx)
         test_mb_size = min(mb_size1, mb_size2)
         (test_loss, test_actor_loss, test_critic_loss, test_entropy_loss, test_kl_reg_loss, test_kl_guide_loss, test_kl_best_loss, test_correct, test_accuracy, test_guesses,) = test(
             old_policy_net,
@@ -364,7 +364,7 @@ def train(
             total_vocab,
             target_vocab,
             max_guesses,
-            target_idx,
+            test_idx,
             test_mb_size,
             total_vocab_tensor,
             target_vocab_tensor,
@@ -397,6 +397,9 @@ def train(
         print(log_line)
         with open(f'{log_dir}/run_log.txt', 'a') as f:
             f.write(log_line + "\n")
+
+        # ---------------- Update Replay ----------------
+        replay_loader.update(test_idx, test_idx[~test_correct.cpu()])
 
         # ---------------- Checkpoint ----------------
         replay = (test_accuracy < 1.0)  # use replay if any guesses were incorrect
