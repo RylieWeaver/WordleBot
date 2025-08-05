@@ -228,14 +228,14 @@ def process_episodes(
     gae = torch.zeros(episodes_shape, dtype=torch.float32, device=device)  # [batch_size, *]
     for t in reversed(range(max_guesses)):
         blended_rewards = reward_blend_factor*expected_rewards_batch[..., t] + (1-reward_blend_factor)*rewards_batch[..., t]
-        blended_values = value_blend_factor*expected_values_batch[..., t] + (1-value_blend_factor)*values_batch[..., t+1]
+        blended_values = (value_blend_factor*expected_values_batch[..., t] + (1-value_blend_factor)*values_batch[..., t+1]).detach()
         delta = blended_rewards + gamma * blended_values - values_batch[..., t]
         gae = delta + gamma * lam * gae
         advantages_batch[..., t] = gae
 
     # Calculate the probabilities given a policy
     policy_probs_batch, final_probs_batch = make_probs(logits_batch, alpha, temperature, valid_mask_batch)  # [batch_size, *, max_guesses, total_vocab_size], [batch_size, *, total_vocab_size]
-    guide_probs_batch = (policy_probs_batch.clone() * valid_mask_batch.float())  # [batch_size, *, max_guesses, total_vocab_size]
+    guide_probs_batch = (policy_probs_batch.clone() * valid_mask_batch.float()).detach()  # [batch_size, *, max_guesses, total_vocab_size]
     guide_probs_batch = normalize_probs(guide_probs_batch, valid_mask_batch)
 
     return advantages_batch, policy_probs_batch, guide_probs_batch
