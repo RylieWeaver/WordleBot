@@ -399,10 +399,10 @@ def train(
             f.write(log_line + "\n")
 
         # ---------------- Update Replay ----------------
+        replay = (test_accuracy < 1.0)  # use replay if any guesses were incorrect
         replay_loader.update(test_idx, test_idx[~test_correct.cpu()])
 
         # ---------------- Checkpoint ----------------
-        replay = (test_accuracy < 1.0)  # use replay if any guesses were incorrect
         if (test_accuracy > best_test_accuracy or (test_accuracy == best_test_accuracy and test_guesses < best_test_guesses)):
             print(f'  -> New best model found')
             best_policy_net.load_state_dict(actor_critic_net.state_dict())
