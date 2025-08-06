@@ -610,7 +610,7 @@ def test(
                         guess_mask_minibatch,
                         active_mask_minibatch,
                         valid_mask_minibatch,
-                        norm=True,
+                        norm=False,  # No normalization in evaluation
                         clip_advantages=False,
                     )
 
