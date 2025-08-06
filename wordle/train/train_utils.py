@@ -100,7 +100,7 @@ def calculate_loss(
     # # Normalize advantages per time step
     # if norm:
     #     advantages_masked = advantages * active_mask[..., :-1]
-    #     num_active = op_except(active_mask[..., :-1], except_dims=[0,1], type="sum", keepdim=True)
+    #     num_active = op_except(active_mask[..., :-1], except_dims=-1, type="sum", keepdim=True)
     #     sum_adv = op_except(advantages_masked, except_dims=-1, type="sum", keepdim=True)
     #     mean_adv = (sum_adv / num_active.clamp_min(eps)).detach()
     #     diff_adv = (advantages - mean_adv) * active_mask[..., :-1]
