@@ -398,7 +398,8 @@ def train(
 
         # ---------------- Update Replay ----------------
         replay = (test_accuracy < 1.0)  # use replay if any guesses were incorrect
-        replay_loader.update(test_idx, test_idx[~test_correct.cpu()])
+        if replay and replay_loader is not None:
+            replay_loader.update(test_idx, test_idx[~test_correct.cpu()])
 
         # ---------------- Checkpoint ----------------
         if (test_accuracy > best_test_accuracy or (test_accuracy == best_test_accuracy and test_guesses < best_test_guesses)):
@@ -407,7 +408,8 @@ def train(
             best_policy_net.eval()  # Reset evaluation mode to recompute buffers
             if checkpointing:
                 save_checkpoint(actor_critic_net, test_accuracy, test_guesses, config, log_dir)
-                replay_loader.save(f'{log_dir}/replay_loader.json')
+                if replay_loader is not None:
+                    replay_loader.save(f'{log_dir}/replay_loader.json')
 
         # ---------------- Evolve Learning ----------------
         # Check improvement on test loss
