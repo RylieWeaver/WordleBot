@@ -84,7 +84,7 @@ def collect_episodes(
 
         # Initialize environment state
         alphabet_states = torch.zeros((*episodes_shape, 26, 11), dtype=torch.float32).to(device)
-        alphabet_entropy = torch.full(episodes_shape, math.log2(max(total_vocab_size, 1)), device=device, dtype=torch.float32)
+        alphabet_entropy = torch.full(episodes_shape, math.log2(max(target_size, 1)), device=device, dtype=torch.float32)
         target_mask = torch.ones((*episodes_shape, target_size), dtype=torch.bool).to(device)
         guess_states = torch.zeros((*episodes_shape, max_guesses), dtype=torch.float32, device=device)
         guess_states[..., 0] = 1.0

@@ -49,12 +49,12 @@ def measure_grad_norms(
         return torch.stack([g.norm() for g in grads]).mean().item()
     # -----------------------------------------------------------------
 
-    actor_norm  = _mean_grad_norm(actor_coef  * actor_loss)
+    actor_norm = _mean_grad_norm(actor_coef * actor_loss)
     critic_norm = _mean_grad_norm(critic_coef * critic_loss)
-    entropy_norm= _mean_grad_norm(entropy_coef* entropy_loss)
+    entropy_norm = _mean_grad_norm(entropy_coef * entropy_loss)
     kl_reg_norm = _mean_grad_norm(kl_reg_coef * kl_reg_loss)
-    kl_guide_norm=_mean_grad_norm(kl_guide_coef* kl_guide_loss)
-    kl_best_norm= _mean_grad_norm(kl_best_coef * kl_best_loss)
+    kl_guide_norm = _mean_grad_norm(kl_guide_coef * kl_guide_loss)
+    kl_best_norm = _mean_grad_norm(kl_best_coef * kl_best_loss)
 
     return actor_norm, critic_norm, entropy_norm, kl_reg_norm, kl_guide_norm, kl_best_norm
 
@@ -84,5 +84,5 @@ def clear_cache():
         print("No GPU available, cannot clear cache.")
 
 
-def rest_computer(size, multiplier=(1.0/200.0)):
+def rest_computer(size, multiplier=0.001):
     time.sleep(multiplier * size)

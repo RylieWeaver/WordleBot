@@ -2,9 +2,6 @@
 import torch
 import torch.nn.functional as F
 
-# Wordle
-from wordle.utils import op_except
-
 
 def log_normalize(probs, eps=1e-12, clamp=1e-12):
     probs = probs + eps  # Avoid log(0)
@@ -13,7 +10,7 @@ def log_normalize(probs, eps=1e-12, clamp=1e-12):
 
 
 # Freeze gradients for some probs probs outside the range
-def clip_grad(probs, valid_mask, min=-0.01, max=0.99):
+def clip_grad(probs, min=-0.01, max=0.95):
     keep = (((probs >= min) & (probs <= max)).float())
     return probs * keep + (1 - keep) * probs.detach()
 
@@ -34,7 +31,7 @@ def calculate_loss(
     active_mask,
     valid_mask,
     norm=True,
-    grad_range=(-0.01, 0.99),
+    grad_range=(-0.01, 0.95),
     clip_advantages=False,
     clip_eps=0.2,
 ):
@@ -65,7 +62,7 @@ def calculate_loss(
     eps = 1e-10  # Small value to avoid instabilities
 
     # Freeze gradient for probs outside threshold (used to avoid the kl-guide from getting too much of the gradient)
-    clipped_probs = clip_grad(probs, valid_mask, grad_range[0], grad_range[1])
+    clipped_probs = clip_grad(probs, grad_range[0], grad_range[1])
 
     # Mask prob distributions
     policy_advantages = advantages.clone().detach()
@@ -98,22 +95,8 @@ def calculate_loss(
     # Critic loss is computed with advantages before normalization
     critic_losses = value_advantages_active.pow(2)
 
-    # # Normalize advantages per time step
-    # if norm:
-    #     policy_advantages_masked = policy_advantages * active_mask[..., :-1]
-    #     num_active = op_except(active_mask[..., :-1], except_dims=-1, type="sum", keepdim=True)
-    #     sum_adv = op_except(policy_advantages_masked, except_dims=-1, type="sum", keepdim=True)
-    #     mean_adv = (sum_adv / num_active.clamp_min(eps))
-    #     diff_adv = (policy_advantages - mean_adv) * active_mask[..., :-1]
-    #     std_adv = ((op_except(diff_adv.pow(2), except_dims=-1, type="sum", keepdim=True)) / num_active.clamp_min(eps)).sqrt().clamp_min(eps)
-    #     zero = torch.zeros_like(mean_adv)
-    #     one = torch.ones_like(std_adv)
-    #     mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games
-    #     std_adv = torch.where(num_active <= 1, one,  std_adv)  # default to 1.0 std when not enough active games
-    #     policy_advantages = (policy_advantages - mean_adv) / std_adv
-
-    # Normalize advantages per group
-    if norm:
+    # Normalize advantages by group
+    if norm is True:
         policy_advantages_masked = policy_advantages * active_mask[..., :-1]
         num_active = active_mask[..., :-1].sum(dim=1, keepdim=True)
         sum_adv = policy_advantages_masked.sum(dim=1, keepdim=True)
@@ -122,17 +105,9 @@ def calculate_loss(
         std_adv = ((diff_adv.pow(2).sum(dim=1, keepdim=True)) / num_active.clamp_min(eps)).sqrt().clamp_min(eps)
         zero = torch.zeros_like(mean_adv)
         one = torch.ones_like(std_adv)
-        mean_adv = torch.where(num_active <= 1, zero, mean_adv)  # skip mean normalization when not enough active games
-        std_adv = torch.where(num_active <= 1, one,  std_adv)  # default to 1.0 std when not enough active games
+        mean_adv = torch.where(num_active <= 1, zero, mean_adv).detach()  # skip mean normalization when not enough active games
+        std_adv = torch.where(num_active <= 1, one,  std_adv).detach()  # default to 1.0 std when not enough active games
         policy_advantages = (policy_advantages - mean_adv) / std_adv
-
-    # # Normalize advantages
-    # if norm:
-    #     policy_advantages_active = policy_advantages[active_mask[..., :-1]]
-    #     mean_adv = policy_advantages_active.mean()
-    #     std_adv = policy_advantages_active.std().clamp_min(eps)
-    #     policy_advantages = (policy_advantages - mean_adv) / std_adv
-
     policy_advantages_active = policy_advantages[active_mask[..., :-1]]
 
     # Actor loss

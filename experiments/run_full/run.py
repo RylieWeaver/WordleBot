@@ -17,7 +17,7 @@ def main():
     # Setup
     config = load_config('config.json')
     device = config["Model"]["device"]
-    load_dir = 'log_dir'
+    # load_dir = 'log_dir2'
     # checkpoint_config = load_config(f'{load_dir}/config.json')
     checkpoint_config = config
 
@@ -28,14 +28,15 @@ def main():
         target_vocab = [line.strip() for line in f]
 
     # Replay buffer
-    replay_loader = HardWordBuffer(target_vocab, replay_ratio=config["Training"]["replay"]["replay_ratio"])
-    # replay_loader = HardWordBuffer.load(f'{load_dir}/replay_loader.json')
+    # replay_loader = HardWordBuffer(target_vocab, replay_ratio=config["Training"]["replay"]["replay_ratio"], rho=0.1)
+    # replay_loader = HardWordBuffer.load(f'{load_dir}/replay_loader.json', replay_ratio=config["Training"]["replay"]["replay_ratio"], rho=0.1)
 
     # Model
     total_vocab_tensor = words_to_tensor(total_vocab).to(device)  # [total_vocab_size, 5]
     actor_critic_net = DotGuessStateNet(
         input_dim=checkpoint_config["Data"]["state_size"],  # 292 = 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
         hidden_dim=checkpoint_config["Model"]["hidden_dim"],
+        output_dim=checkpoint_config["Model"]["output_dim"],
         total_vocab_tensor=total_vocab_tensor,
         layers=checkpoint_config["Model"]["layers"],
         dropout=config["Model"]["dropout"],
@@ -46,7 +47,6 @@ def main():
     # Train the network
     train(
         actor_critic_net,
-        replay_loader,
         total_vocab,
         target_vocab,
         config["Data"]["max_guesses"],
@@ -85,7 +85,8 @@ def main():
         config["Training"]["scheduling"]["greedify_patience"],
         config["Training"]["scheduling"]["warmup_steps"],
         config["Training"]["scheduling"]["early_stopping_patience"],
-        config
+        config,
+        replay_loader=None  # Use None for no replay
     )
 
 

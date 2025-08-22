@@ -21,7 +21,6 @@ from wordle.utils import measure_grad_norms, save_checkpoint, clear_cache, rest_
 ############################################
 def train(
     actor_critic_net,
-    replay_loader,
     total_vocab,
     target_vocab,
     max_guesses,
@@ -61,6 +60,7 @@ def train(
     warmup_steps,
     early_stopping_patience,
     config,
+    replay_loader=None,
 ):
     """
     Full RL training loop for the WordleBot. Includes episode collection, processing, and gradient steps.
@@ -96,9 +96,9 @@ def train(
 
     best_test_actor_loss = float('inf')
     best_test_critic_loss = float('inf')
-    best_test_accuracy = 0.0
+    best_test_accuracy = -1e-8
     best_test_guesses = float(max_guesses)
-    best_rollout_accuracy = 0.0
+    best_rollout_accuracy = -1e-8
     best_rollout_guesses = float(max_guesses)
     no_improve_count = 0
 
@@ -114,7 +114,7 @@ def train(
     for epoch in range(1, epochs + 1):
         # ------------------- Generate Epoch Indices -------------------
         target_vocab_idx = torch.arange(len(target_vocab)).to(device)
-        if replay:
+        if replay and replay_loader is not None:
             replay_idx = torch.tensor(replay_loader.sample()).to(device)
             epoch_idx = torch.cat((target_vocab_idx, replay_idx), dim=0)  # [(1 + replay_ratio) * len(target_vocab)]
         else:
@@ -196,9 +196,6 @@ def train(
         num_games = correct_epoch.flatten().size(0)
         rollout_guesses = (num_guesses / num_games).item()  # Average number of guesses taken in the rollout
 
-        # # ---------------- Update Replay ----------------
-        # replay_loader.update(epoch_idx, epoch_idx[~correct_epoch.cpu()])
-
         # ---------------- Multiple Passes Per Rollout ----------------
         actor_critic_net.train()  # set to train mode for episode
         for update in range(rollout_size):
@@ -211,7 +208,8 @@ def train(
                     # ------------------ Pass Through Episodes ------------------
                     for batch in range(num_batches):
                         batch_idx = rollout_idx[batch * b_size : (batch+1) * b_size]
-                        # -------- Process Episodes and Backprop in Minibatches --------
+
+                        # -------- Process Episodes in Minibatches --------
                         mb_size = process_minibatch_size if process_minibatch_size is not None else len(batch_idx)
                         num_minibatches = (len(batch_idx) + mb_size - 1) // mb_size
                         for mb in range(num_minibatches):
@@ -330,7 +328,7 @@ def train(
                             loss_mb.backward()
 
                             # ---------------- Rest Computer to Prevent Overheating ----------------
-                            rest_computer(len(mb_idx))  # Rest based on minibatch size
+                            rest_computer(len(mb_idx)*target_repeats)  # Rest based on minibatch size
 
                         # -------------- Backprop --------------
                         torch.nn.utils.clip_grad_norm_(actor_critic_net.parameters(), max_norm=max_grad_norm)  # Clip gradients to prevent exploding gradients
@@ -458,9 +456,6 @@ def train(
             if checkpointing:
                 save_checkpoint(actor_critic_net, test_accuracy, test_guesses, config, log_dir, name='posttrained_model.pth')
             break
-
-        # ---------------- Rest Computer to Prevent Overheating ----------------
-        rest_computer(len(target_vocab))  # Rest based on target vocab length
             
     print('Training complete!')
 

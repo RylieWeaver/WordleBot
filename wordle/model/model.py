@@ -133,23 +133,24 @@ class SeparatedActorCriticNet(nn.Module):
 # DOT GUESS STATE NETWORK
 ############################################
 class DotGuessStateNet(nn.Module):
-    def __init__(self, input_dim, hidden_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
+    def __init__(self, input_dim, hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
         super().__init__()
         self.state_layers = nn.ModuleList()
         self.guess_layers = nn.ModuleList()
         self.hidden_dim = hidden_dim
         self.vocab_size = total_vocab_tensor.shape[0]
-        guess_dim = max(hidden_dim // 16, 16)
+        guess_dim = max(hidden_dim // 16, 128)
         self.guess_dim = guess_dim
         self.act = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
         self.device = device
-        output_dim = total_vocab_tensor.shape[0]
-        self.register_buffer("guess_states", F.one_hot(total_vocab_tensor, num_classes=26).float().permute(0, 2, 1).reshape(output_dim, -1).to(torch.float32))  # [total_vocab_size, 26*5]
+        self.register_buffer("guess_states", F.one_hot(total_vocab_tensor, num_classes=26).float().permute(0, 2, 1).reshape(self.vocab_size, -1).to(torch.float32))  # [total_vocab_size, 26*5]
 
         # Embedding
         self.state_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
+        # self.state_embed = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
         self.guess_embed = nn.Sequential(nn.Linear(130, guess_dim), self.act, self.dropout)
+        # self.guess_embed = nn.Sequential(nn.LayerNorm(130), nn.Linear(130, guess_dim), self.act, self.dropout)
 
         # Layers
         for _ in range(layers):
@@ -157,8 +158,8 @@ class DotGuessStateNet(nn.Module):
             self.guess_layers.append(MLPBlock(guess_dim, activation=self.act, dropout=dropout))
 
         # Guess state attention
-        self.state_q = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
-        self.guess_k = nn.Sequential(nn.LayerNorm(guess_dim), nn.Linear(guess_dim, hidden_dim))
+        self.state_q = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, output_dim))
+        self.guess_k = nn.Sequential(nn.LayerNorm(guess_dim), nn.Linear(guess_dim, output_dim))
 
         # Output heads
         self.value = nn.Sequential(
@@ -184,7 +185,7 @@ class DotGuessStateNet(nn.Module):
     def eval(self):
         super().eval()
         with torch.no_grad():
-            self.guess_k_static = self._build_guess_k().detach()
+            self.guess_k_static = self._build_guess_k().clone().detach()
         return self
 
     def forward(self, x):
