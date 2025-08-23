@@ -216,7 +216,7 @@ class DotGuessStateNet(nn.Module):
 
 
 ############################################
-# DOT GUESS STATE NETWORK
+# DOT GUESS STATE NETWORK2
 ############################################
 class DotGuessStateNet2(nn.Module):
     def __init__(self, state_input_dim, state_hidden_dim, letter_hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
@@ -265,7 +265,7 @@ class DotGuessStateNet2(nn.Module):
             l = letter_layer(l)
         l = (l + sc_l)  # [130, hidden_dim]
         # Key projection and mean
-        l = self.guess_k(l)  # [130, hidden_dim]
+        l = self.letter_k(l)  # [130, hidden_dim]
         k = l[self.guess_idxs].mean(dim=-2)  # [total_vocab_size, hidden_dim]
         return k
 
