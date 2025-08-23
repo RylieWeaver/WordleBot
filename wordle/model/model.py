@@ -133,42 +133,40 @@ class SeparatedActorCriticNet(nn.Module):
 # DOT GUESS STATE NETWORK
 ############################################
 class DotGuessStateNet(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
+    def __init__(self, state_input_dim, state_hidden_dim, guess_hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
         super().__init__()
         self.state_layers = nn.ModuleList()
         self.guess_layers = nn.ModuleList()
-        self.hidden_dim = hidden_dim
+        self.state_hidden_dim = state_hidden_dim
+        self.guess_hidden_dim = guess_hidden_dim
+        self.output_dim = output_dim
         self.vocab_size = total_vocab_tensor.shape[0]
-        guess_dim = max(hidden_dim // 16, 128)
-        self.guess_dim = guess_dim
         self.act = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
         self.device = device
         self.register_buffer("guess_states", F.one_hot(total_vocab_tensor, num_classes=26).float().permute(0, 2, 1).reshape(self.vocab_size, -1).to(torch.float32))  # [total_vocab_size, 26*5]
 
         # Embedding
-        self.state_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-        # self.state_embed = nn.Sequential(nn.LayerNorm(input_dim), nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-        self.guess_embed = nn.Sequential(nn.Linear(130, guess_dim), self.act, self.dropout)
-        # self.guess_embed = nn.Sequential(nn.LayerNorm(130), nn.Linear(130, guess_dim), self.act, self.dropout)
+        self.state_embed = nn.Sequential(nn.LayerNorm(state_input_dim), nn.Linear(state_input_dim, state_hidden_dim), self.act, self.dropout)
+        self.guess_embed = nn.Sequential(nn.LayerNorm(130), nn.Linear(130, guess_hidden_dim), self.act, self.dropout)
 
         # Layers
         for _ in range(layers):
-            self.state_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
-            self.guess_layers.append(MLPBlock(guess_dim, activation=self.act, dropout=dropout))
+            self.state_layers.append(MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout))
+            self.guess_layers.append(MLPBlock(guess_hidden_dim, activation=self.act, dropout=dropout))
 
         # Guess state attention
-        self.state_q = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, output_dim))
-        self.guess_k = nn.Sequential(nn.LayerNorm(guess_dim), nn.Linear(guess_dim, output_dim))
+        self.state_q = nn.Sequential(nn.LayerNorm(state_hidden_dim), nn.Linear(state_hidden_dim, output_dim))
+        self.guess_k = nn.Sequential(nn.LayerNorm(guess_hidden_dim), nn.Linear(guess_hidden_dim, output_dim))
 
         # Output heads
         self.value = nn.Sequential(
-            MLPBlock(hidden_dim, activation=self.act, dropout=dropout),
-            nn.Linear(hidden_dim, 1)
+            MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout),
+            nn.Linear(state_hidden_dim, 1)
         )
 
         # Initialize guess keys
-        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, hidden_dim]))   # will hold cached keys in eval
+        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, output_dim]))   # will hold cached keys in eval
 
     def _build_guess_k(self):
         # Input embedding
@@ -191,8 +189,8 @@ class DotGuessStateNet(nn.Module):
     def forward(self, x):
         """
         x: [batch_size, *, state_dim]
-        returns: (logits, value)
-          logits: [batch_size, *, total_vocab_size]
+        returns: (scores, value)
+          scores: [batch_size, *, total_vocab_size]
           value:  [batch_size, *, 1]
         """
         # State embedding
@@ -208,7 +206,7 @@ class DotGuessStateNet(nn.Module):
 
         # Logit
         q = self.state_q(x)  # [batch_size, *, hidden_dim]
-        scores = (q @ k.T) / sqrt(self.hidden_dim)  # [batch_size, *, total_vocab_size]
+        scores = (q @ k.T) / sqrt(self.output_dim)  # [batch_size, *, total_vocab_size]
 
         # Value
         state_value = self.value(x)  # [batch_size, *, 1]
@@ -221,11 +219,13 @@ class DotGuessStateNet(nn.Module):
 # DOT GUESS STATE NETWORK
 ############################################
 class DotGuessStateNet2(nn.Module):
-    def __init__(self, input_dim, hidden_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
+    def __init__(self, state_input_dim, state_hidden_dim, letter_hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
         super().__init__()
         self.state_layers = nn.ModuleList()
         self.letter_layers = nn.ModuleList()
-        self.hidden_dim = hidden_dim
+        self.state_hidden_dim = state_hidden_dim
+        self.letter_hidden_dim = letter_hidden_dim
+        self.output_dim = output_dim
         self.vocab_size = total_vocab_tensor.shape[0]
         self.act = nn.SiLU()
         self.dropout = nn.Dropout(dropout)
@@ -235,26 +235,26 @@ class DotGuessStateNet2(nn.Module):
         self.register_buffer("letter_mask", torch.arange(130, device=device).to(torch.long))  # [130]
 
         # Embedding
-        self.state_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-        self.letter_embed = nn.Sequential(nn.Embedding(130, hidden_dim), self.act, self.dropout)
+        self.state_embed = nn.Sequential(nn.LayerNorm(state_input_dim), nn.Linear(state_input_dim, state_hidden_dim), self.act, self.dropout)
+        self.letter_embed = nn.Sequential(nn.Embedding(130, letter_hidden_dim), self.act, self.dropout)
 
         # Layers
         for _ in range(layers):
-            self.state_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
-            self.letter_layers.append(MLPBlock(hidden_dim, activation=self.act, dropout=dropout))
+            self.state_layers.append(MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout))
+            self.letter_layers.append(MLPBlock(letter_hidden_dim, activation=self.act, dropout=dropout))
 
         # Guess state attention
-        self.state_q = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
-        self.letter_k = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim))
+        self.state_q = nn.Sequential(nn.LayerNorm(state_hidden_dim), nn.Linear(state_hidden_dim, output_dim))
+        self.letter_k = nn.Sequential(nn.LayerNorm(letter_hidden_dim), nn.Linear(letter_hidden_dim, output_dim))
 
         # Output heads
         self.value = nn.Sequential(
-            MLPBlock(hidden_dim, activation=self.act, dropout=dropout),
-            nn.Linear(hidden_dim, 1)
+            MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout),
+            nn.Linear(state_hidden_dim, 1)
         )
 
         # Initialize guess keys
-        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, hidden_dim]))   # will hold cached keys in eval
+        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, output_dim]))   # will hold cached keys in eval
 
     def _build_guess_k(self):
         # Input embedding
@@ -272,14 +272,14 @@ class DotGuessStateNet2(nn.Module):
     def eval(self):
         super().eval()
         with torch.no_grad():
-            self.guess_k_static = self._build_guess_k().detach()
+            self.guess_k_static = self._build_guess_k().clone().detach()
         return self
 
     def forward(self, x):
         """
         x: [batch_size, *, state_dim]
-        returns: (logits, value)
-          logits: [batch_size, *, total_vocab_size]
+        returns: (scores, value)
+          scores: [batch_size, *, total_vocab_size]
           value:  [batch_size, *, 1]
         """
         # State embedding
@@ -295,7 +295,7 @@ class DotGuessStateNet2(nn.Module):
 
         # Logit
         q = self.state_q(x)  # [batch_size, *, hidden_dim]
-        scores = (q @ k.T) / sqrt(self.hidden_dim)  # [batch_size, *, total_vocab_size]
+        scores = (q @ k.T) / sqrt(self.output_dim)  # [batch_size, *, total_vocab_size]
 
         # Value
         state_value = self.value(x)  # [batch_size, *, 1]

@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 
-def get_vocab(guess_vocab_size=None, target_vocab_size=None):
+def get_vocab(guess_vocab_size=None, target_vocab_size=None, answers_type="updated"):
     """
     Load the vocabulary (or a subset of it) from the text files. 
     The words are loaded from two text files:
@@ -20,7 +20,9 @@ def get_vocab(guess_vocab_size=None, target_vocab_size=None):
     Returns:
     - *_vocab: a list of words, each word is a string of length 5
     """
+    # Setup
     dir = os.path.dirname(__file__)
+    answers_fname = 'answer_list_plus.txt' if answers_type == "updated" else 'answer_list.txt'
     guess_vocab = []
     target_vocab = []
     
@@ -34,7 +36,7 @@ def get_vocab(guess_vocab_size=None, target_vocab_size=None):
         guess_vocab = np.array(guess_vocab)
 
     # Target vocab
-    with open(os.path.join(dir, 'answer_list.txt')) as f:
+    with open(os.path.join(dir, answers_fname)) as f:
         target_vocab.extend(line.strip() for line in f)
     # Subset
     if target_vocab_size is not None:

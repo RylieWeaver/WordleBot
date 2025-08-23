@@ -128,8 +128,8 @@ def select_actions(
     - actor_critic_net: the actor-critic network
     - alphabet_states: [batch_size, *, 26, 11]
     - guess_states: [batch_size, *, max_guesses]
-    - total_vocab: the total vocabulary (10657 non-target plus 2316 target)
-    - target_vocab: the vocabulary of targets (2316)
+    - total_vocab: the total vocabulary
+    - target_vocab: the vocabulary of targets
     - total_vocab_tensor: [total_vocab_size, 5]
     - total_vocab_states: [total_vocab_size, 26, 11]
     - target_vocab_tensor: [target_vocab_size, 5]

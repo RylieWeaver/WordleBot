@@ -2,9 +2,6 @@
 import json
 import os
 
-# Torch
-import torch
-
 
 def merge_defaults(defaults, config):
     for key, val in defaults.items():

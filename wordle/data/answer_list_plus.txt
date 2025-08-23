@@ -1071,6 +1071,7 @@ kappa
 karma
 kayak
 kebab
+kefir
 khaki
 kinky
 kiosk
@@ -1080,6 +1081,7 @@ knave
 knead
 kneed
 kneel
+knell
 knelt
 knife
 knock
@@ -2070,6 +2072,7 @@ tipsy
 titan
 tithe
 title
+tizzy
 toast
 today
 toddy
