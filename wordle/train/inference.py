@@ -50,7 +50,7 @@ def inference(
                     mb_idx = target_idx[mb * minibatch_size : (mb + 1) * minibatch_size]
                     target_tensor = target_vocab_tensor[mb_idx]
                     # -------- Run episodes --------
-                    (alphabet_states_minibatch, guess_states_minibatch, _, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
+                    (alphabet_states_minibatch, guess_states_minibatch, _, correct_minibatch, expected_values_minibatch, expected_rewards_minibatch, rewards_minibatch, guess_mask_minibatch, active_mask_minibatch, valid_mask_minibatch) = collect_episodes(
                         actor_critic_net,
                         total_vocab,
                         target_vocab,
