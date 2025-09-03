@@ -386,8 +386,8 @@ def train(
 
         # ---------------- Print Training Progress and Write to Run Log ----------------
         log_line = (
-            f"Epoch {epoch}/{epochs} | Test Acc: {test_accuracy:.2%} | Test Avg Guesses: {test_guesses:.2f} | "
-            f"Rollout Accuracy: {rollout_accuracy:.2%} | Rollout Avg Guesses: {rollout_guesses:.2f} | alpha={alpha:.2f}, temp={temperature:.2f} | "
+            f"Epoch {epoch}/{epochs} | Test Acc: {test_accuracy:.2%} | Test Avg Guesses: {test_guesses:.3f} | "
+            f"Rollout Accuracy: {rollout_accuracy:.2%} | Rollout Avg Guesses: {rollout_guesses:.3f} | alpha={alpha:.2f}, temp={temperature:.2f} | "
             f"Actor Loss: {test_actor_loss:.4f} * {actor_coef:.2f}, Critic Loss: {test_critic_loss:.4f} * {critic_coef:.2f}| "
             f"Entropy Loss: {test_entropy_loss:.4f} * {entropy_coef:.2f}, Train KL-Reg Loss: {test_kl_reg_loss:.4f} * {kl_reg_coef:.2f}, "
             f"Test KL-Guide Loss: {test_kl_guide_loss:.4f} * {kl_guide_coef:.2f}, Test KL-Best Loss: {test_kl_best_loss:.4f} * {kl_best_coef:.2f}, "
