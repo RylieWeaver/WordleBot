@@ -12,12 +12,10 @@ from wordle.utils import load_config
 
 
 
-# Change comments if loading from a checkpoint or fresh start
 def main():
     # Setup
     config = load_config('config.json')
     device = config["Model"]["device"]
-    checkpoint_config = config
 
     # Data
     with open('total_vocab.txt', 'r') as f:
@@ -33,12 +31,12 @@ def main():
         # Model
         total_vocab_tensor = words_to_tensor(total_vocab).to(device)  # [total_vocab_size, 5]
         actor_critic_net = DotGuessStateNet(
-            state_input_dim=checkpoint_config["Data"]["state_size"],  # 292 = 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
+            state_input_dim=config["Data"]["state_size"],  # 292 = 26 letters * 11 letter possibilities (1 for number, 5 green, 5 grey possibilites) plus 6 for one-hot of the number of guesses taken so far
             state_hidden_dim=state_hidden_dim,  # varies each run
             guess_hidden_dim=guess_hidden_dim,  # varies each run
             output_dim=output_dim,  # varies each run
             total_vocab_tensor=total_vocab_tensor,
-            layers=checkpoint_config["Model"]["layers"],
+            layers=config["Model"]["layers"],
             dropout=config["Model"]["dropout"],
             device=device
         ).to(device)
