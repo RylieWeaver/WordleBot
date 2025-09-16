@@ -1,5 +1,6 @@
 # General
 import os
+import time
 
 # Torch
 import torch
@@ -41,13 +42,16 @@ def main():
             device=device
         ).to(device)
 
-        # Log some things
+        # Log varied hyperparameter and time
         log_dir = os.path.join(os.getcwd(), f"log_dir_{i}")
         os.makedirs(log_dir, exist_ok=True)
         with open(os.path.join(log_dir, 'model_size.txt'), 'a') as f:
             f.write(f"Guess hidden dim: {guess_hidden_dim}, State hidden dim: {state_hidden_dim}, Output dim: {output_dim}\n")
             num_params = sum(p.numel() for p in actor_critic_net.parameters())
             f.write(f"Number of parameters in the model: {num_params}\n")
+        with open(os.path.join(log_dir, 'time_log.txt'), 'a') as f:
+            start_time = time.time()
+            f.write(f"Starting Time = {start_time}\n")
 
         # Train the network
         train(
@@ -93,6 +97,12 @@ def main():
             config,
             replay_loader=None  # Using None for no replay
         )
+
+        # Save final time
+        with open(os.path.join(log_dir, 'time_log.txt'), 'a') as f:
+            end_time = time.time()
+            f.write(f"Ending Time = {end_time}\n")
+            f.write(f"Total Time = {end_time - start_time}\n")
 
 
 if __name__ == '__main__':
