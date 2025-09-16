@@ -54,14 +54,27 @@ def update_alphabet_states(given_alphabet_states, guess_tensor, target_tensor):
     ## Checking non-matches
     not_exist = ((guessed > 0) & (exist == 0)).expand(*guessed.shape[:-1], 5)  # [batch_size, *, 26, 5]
     found_not = guess_loc & ~target_loc  # [batch_size, *, 26, 5]
+    grey_mask = not_exist | found_not  # [batch_size, *, 26, 5]
+
+    # Combine with old state
+    green_mask = green_mask | given_alphabet_states[..., 1:6].bool()
+    grey_mask = grey_mask | given_alphabet_states[..., 6:].bool()
+
+    # Final update where colors could imply each other
+    ## Green implies all others are grey
     occupied = green_mask.any(dim=-2, keepdim=True) & ~green_mask  # [batch_size, *, 26, 5]
-    grey_mask = not_exist | found_not | occupied  # [batch_size, *, 26, 5]
-    ## Checking if the entire guessed word was equal to the target
-    correct = (guess_tensor == target_tensor).all(dim=-1)  # [batch_size, *]
+    grey_mask = grey_mask | occupied
+    ## All others grey implies green
+    no_others = (grey_mask.sum(dim=-2, keepdim=True) == 25)  # [batch_size, *, 1, 5]
+    implied_greens = no_others & ~grey_mask  # [batch_size, *, 26, 5]
+    green_mask = green_mask | implied_greens
 
     # Combine and update
     guess_alphabet_states = torch.cat([letter_count, green_mask, grey_mask], dim=-1).float()  # [batch_size, *, 26, 11]
     new_alphabet_states = torch.max(guess_alphabet_states, given_alphabet_states)  # [batch_size, *, 26, 11]
+
+    # Checking if the entire guessed word was equal to the target
+    correct = (guess_tensor == target_tensor).all(dim=-1)  # [batch_size, *]
 
     return new_alphabet_states, correct
 

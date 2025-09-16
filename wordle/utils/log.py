@@ -72,7 +72,7 @@ def save_checkpoint(actor_critic_net, accuracy, guesses, config, checkpoint_dir,
             'avg_guesses': guesses,
         }, f, indent=4)
     # Show
-    print(f"  -> Model saved with accuracy {accuracy:.2%} and guesses {guesses:.2f}")
+    print(f"  -> Model saved with accuracy {accuracy:.2%} and guesses {guesses:.3f}")
 
 
 def clear_cache():
@@ -84,5 +84,5 @@ def clear_cache():
         print("No GPU available, cannot clear cache.")
 
 
-def rest_computer(size, multiplier=0.001):
+def rest_computer(size, multiplier=0.005):
     time.sleep(multiplier * size)

@@ -4,7 +4,9 @@
         "max_guesses": 6
     },
     "Model": {
-        "hidden_dim": 1024,
+        "state_hidden_dim": 1024,
+        "guess_hidden_dim": 64,
+        "output_dim": 1024,
         "layers": 3,
         "dropout": 0.0,
         "device": "mps"
@@ -12,28 +14,28 @@
     "Training": {
         "epochs": 1000000,
         "rollout_size": 6,
-        "lr": 3e-5,
+        "lr": 8e-5,
         "clip_eps": 0.2,
         "max_grad_norm": 3.0,
-        "batch_size": 600,
-        "target_repeats": 4,
-        "collect_minibatch_size": 25,
-        "process_minibatch_size": 25,
+        "batch_size": 300,
+        "target_repeats": 10,
+        "collect_minibatch_size": 20,
+        "process_minibatch_size": 20,
         "replay": {
-            "replay_ratio": 0.25
+            "replay_ratio": 0.00
         },
         "rewards": {
             "correct_reward": 0.10,
             "gamma": 0.20,
             "lam": 1.00,
-            "m": 5,
-            "reward_blend_factor": 0.9,
-            "value_blend_factor": 0.1
+            "m": 3,
+            "reward_blend_factor": 1.0,
+            "value_blend_factor": 1.0
         },
         "loss": {
             "actor_coef": 1.0,
             "critic_coef": 5.0,
-            "entropy_coef": 0.00,
+            "entropy_coef": 0.05,
             "kl_reg_coef": 1.0,
             "kl_guide_coef": 0.25,
             "kl_best_coef": 0.10
@@ -42,8 +44,8 @@
             "min_lr_factor": 0.33,
             "lr_decay_factor": 0.3,
             "global_lr_decay_factor": 0.99,
-            "greedify_patience": 3,
-            "warmup_steps": 1000,
+            "greedify_patience": 1,
+            "warmup_steps": 1200,
             "early_stopping_patience": 200
         },
         "log": {
@@ -52,11 +54,11 @@
         }
     },
     "Exploration": {
-        "alpha": 1.00,
-        "min_alpha": 0.01,
-        "alpha_step": 0.01,
+        "alpha": 0.99,
+        "min_alpha": 0.00,
+        "alpha_step": 0.08,
         "temperature": 3.00,
         "min_temperature": 0.01,
-        "temperature_decay_factor": 0.95
+        "temperature_decay_factor": 0.90
     }
 }
