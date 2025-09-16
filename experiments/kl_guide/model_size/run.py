@@ -19,9 +19,9 @@ def main():
     device = config["Model"]["device"]
 
     # Data
-    with open('total_vocab.txt', 'r') as f:
+    with open('../total_vocab.txt', 'r') as f:
         total_vocab = [line.strip() for line in f]
-    with open('target_vocab.txt', 'r') as f:
+    with open('../target_vocab.txt', 'r') as f:
         target_vocab = [line.strip() for line in f]
 
     # Run loop of model trainings
