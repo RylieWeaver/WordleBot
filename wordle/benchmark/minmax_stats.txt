@@ -1,2 +1,2 @@
-Average correct: 1.0
-Average guesses: 3.8051836490631104
+Average correct: 0.4514038860797882
+Average guesses: 1.6721382141113281

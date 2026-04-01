@@ -5,6 +5,9 @@ import torch
 
 
 
+def to_float(x):
+    return float(x.detach()) if torch.is_tensor(x) else float(x)
+
 def expand_var(x, dim, size):
     """
     Expand a tensor in a designated dimension while keeping

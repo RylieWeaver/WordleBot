@@ -2,64 +2,74 @@
 import os
 import string
 import numpy as np
+from typing import Optional, Literal
 
 # Torch
 import torch
 
 
-def get_vocab(guess_vocab_size=None, target_vocab_size=None, answers_type="updated"):
+
+def get_vocab(
+        vocab_type: Literal["target", "nontarget"] = "target",
+        size: Optional[int] = None,
+        targets_type="original"
+    ):
     """
-    Load the vocabulary (or a subset of it) from the text files. 
-    The words are loaded from two text files:
-    - answer_list.txt: contains the list of possible answers
-    - guess_list.txt: contains the list of possible guesses that are not in the answer list
+    Load a vocabulary (or a subset of it) from the text files. 
+    The words are loaded from one of two text files:
+    - target_vocab.txt: contains the list of possible target words
+    - nontarget_vocab.txt: contains the list of allowed guesses that aren't targets
 
     Inputs:
-    - *_vocab_size: the number of words to subset
+    - vocab_type: whether to load the target vocab or nontarget vocab
+    - size: if not None, the number of words to sample from the vocab (for quick testing)
+    - targets_type: whether to load the original target vocab or the updated one with more words
 
     Returns:
     - *_vocab: a list of words, each word is a string of length 5
     """
     # Setup
     dir = os.path.dirname(__file__)
-    answers_fname = 'answer_list_plus.txt' if answers_type == "updated" else 'answer_list.txt'
-    guess_vocab = []
-    target_vocab = []
-    
-    # Guess vocab
-    with open(os.path.join(dir, 'guess_list.txt')) as f:
-        guess_vocab.extend(line.strip() for line in f)
-    # Subset
-    if guess_vocab_size is not None:
-        guess_vocab = np.random.choice(guess_vocab, guess_vocab_size, replace=False)
-    else:
-        guess_vocab = np.array(guess_vocab)
 
     # Target vocab
-    with open(os.path.join(dir, answers_fname)) as f:
-        target_vocab.extend(line.strip() for line in f)
-    # Subset
-    if target_vocab_size is not None:
-        target_vocab = np.random.choice(target_vocab, target_vocab_size, replace=False)
-    else:
-        target_vocab = np.array(target_vocab)
-    
-    return np.concatenate((guess_vocab, target_vocab), axis=0), target_vocab
+    if vocab_type == "target":
+        targets_fname = 'target_vocab_plus.txt' if targets_type == "updated" else 'target_vocab.txt'
+        target_vocab = []
+        with open(os.path.join(dir, targets_fname)) as f:
+            target_vocab.extend(line.strip() for line in f)
+        # Subset
+        if size is not None:
+            target_vocab = np.random.choice(target_vocab, size, replace=False)
+        else:
+            target_vocab = np.array(target_vocab)
+        return target_vocab
 
+    # Nontarget vocab
+    if vocab_type == "nontarget":
+        nontarget_vocab = []
+        with open(os.path.join(dir, 'nontarget_vocab.txt')) as f:
+            nontarget_vocab.extend(line.strip() for line in f)
+        # Subset
+        if size is not None:
+            nontarget_vocab = np.random.choice(nontarget_vocab, size, replace=False)
+        else:
+            nontarget_vocab = np.array(nontarget_vocab)
+        return nontarget_vocab
+    
 
 letter_to_idx = {ch: i for i, ch in enumerate(string.ascii_lowercase)}
 
 
 def words_to_tensor(words):
     """
-    Convert a list of words to a tensor representation. Each letter in the word is
-    represented by its index in the alphabet (0-25).
+    Convert a list of 5-letter words to a tensor representation. Each letter
+    in the word is represented by its index in the alphabet (0-25).
 
     Inputs:
-    - words: list of words, each word is a string of length 5
+    - words: [*]
 
     Returns:
-    - words_tensor: [batch_size, 5]
+    - words_tensor: [*, 5]
     """
     mapped = []
     for w in words:
@@ -73,13 +83,13 @@ idx_to_letter = {i: ch for i, ch in enumerate(string.ascii_lowercase)}
 
 def tensor_to_words(tensor):
     """
-    Convert a tensor representation of words back to a list of words.
+    Convert a tensor representation of words back to a list of 5-letter strings.
 
     Inputs:
-    - tensor: [batch_size, 5]
+    - tensor: [*, 5]
 
     Returns:
-    - words: list of words, each word is a string of length 5
+    - words: [*]
     """
     words = []
     for w in tensor:
@@ -93,26 +103,26 @@ def construct_vocab_states(vocab_tensor):
     capturing all information of how letters appear (or not).
 
     Inputs:
-    - vocab_tensor: [vocab_size, 5]
+    - vocab_tensor: [*, 5]
 
     Intermediate:
-    - alphabet_tensor: 1-26 repeated 5 times -- [vocab_size, 26, 5]
-    - green: boolean mask for letter placement -- [vocab_size, 26, 5]
-    - count: count of letter appearances -- [vocab_size, 26, 1]
-    - grey: boolean mask for NOT letter placement -- [vocab_size, 26, 5]
+    - alphabet_tensor: 1-26 repeated 5 times -- [*, 26, 5]
+    - green: boolean mask for letter placement -- [*, 26, 5]
+    - count: count of letter appearances -- [*, 26, 1]
+    - grey: boolean mask for NOT letter placement -- [*, 26, 5]
 
     Returns:
-    - vocab_states: the concatenation of count, green, grey -- [vocab_size, 26, 11]
+    - vocab_states: the concatenation of count, green, grey -- [*, 26, 11]
     """
     # Initialize
     device = vocab_tensor.device
     alphabet_tensor = torch.arange(0, 26).view(1, -1, 1).to(device) # [1, 26, 1]
 
     # Mask and count
-    green = vocab_tensor.unsqueeze(1) == alphabet_tensor  # [vocab_size, 26, 5]
-    count = torch.sum(green, dim=-1, keepdim=True)  # [vocab_size, 26, 1]
-    grey = ~green  # [vocab_size, 26, 5]
+    green = vocab_tensor.unsqueeze(1) == alphabet_tensor    # [V, 26, 5]
+    count = torch.sum(green, dim=-1, keepdim=True)          # [V, 26, 1]
+    grey = ~green                                           # [V, 26, 5]
 
     # Return
-    vocab_states = torch.cat((count, green, grey), dim=-1).float()  # [vocab_size, 26, 11]
+    vocab_states = torch.cat((count, green, grey), dim=-1).float()  # [V, 26, 11]
     return vocab_states

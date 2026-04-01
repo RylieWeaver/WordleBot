@@ -1,4 +1,5 @@
 # General
+from typing import Optional
 from math import sqrt
 
 # Torch
@@ -6,70 +7,106 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Wordle
+from wordle.utils import Config
+from .base import WordleModel
+from .utils import MLPBlock, TransformerBlock
 
 
-##############################################
-# SC-BLOCK
-##############################################
-class MLPBlock(nn.Module):
-    def __init__(self, dim, activation=nn.SiLU(), dropout=0.0):
+
+############################################
+# TIME ONE-HOT ENCODING
+############################################
+class TimeOHE(nn.Module):
+    def __init__(self, max_guesses: int):
         super().__init__()
-        self.res = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
-            activation,
-            nn.Dropout(dropout)
-        )
+        # row 0 = zeros, rows 1..G = one‑hots
+        table = torch.zeros(max_guesses + 1, max_guesses, dtype=torch.float32)
+        table[1:, :] = torch.eye(max_guesses, dtype=torch.float32)
+        self.register_buffer("lu_table", table, persistent=False)
 
-    def forward(self, x):
-        return x + self.res(x)
-
+    def forward(self, t):
+        # t can be any shape, assumes t starts at 1
+        t = t.to(torch.long)
+        valid = (t >= 1) & (t <= self.lu_table.size(0) - 1)
+        idx = torch.where(valid, t, torch.zeros_like(t))
+        return self.lu_table[idx]
 
 
 ############################################
 # ACTOR-CRITIC NETWORK
 ############################################
-class ActorCriticNet(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, layers=3, dropout=0.1, device='cpu'):
-        super().__init__()
+class ActorCriticNetConfig(Config):
+    def __init__(
+            self,
+            hidden_dim: int,
+            output_dim: int,
+            num_letters: int = 26,
+            letter_input_dim: int = 11,
+            max_guesses: int = 6,
+            layers: int = 3,
+            dropout: float = 0.1,
+        ):
+        self.model_name = "ActorCriticNet"
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_letters = num_letters
+        self.letter_input_dim = letter_input_dim
+        self.max_guesses = max_guesses
+        self.layers = layers
+        self.dropout = dropout
+
+class ActorCriticNet(WordleModel):
+    def __init__(self, cfg: ActorCriticNetConfig, device):
+        super().__init__(device)
         self.network = nn.ModuleList()
         self.act = nn.SiLU()
-        self.dropout = nn.Dropout(dropout)
-        self.device = device
+        # Read (aliases for convenience)
+        self.cfg = cfg
+        self.hidden_dim = H = self.cfg.hidden_dim
+        self.output_dim = O = self.cfg.output_dim
+        self.num_letters = N = self.cfg.num_letters
+        self.letter_input_dim = D = self.cfg.letter_input_dim
+        self.max_guesses = G = self.cfg.max_guesses
+        self.layers = L = self.cfg.layers
+        self.dropout = self.cfg.dropout
+        input_dim = I = (N * D) + G
 
         # Embedding
-        self.embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.LayerNorm(hidden_dim), self.act, self.dropout)  # First layer embeds the input to hidden_dim
-
+        self.t_ohe = TimeOHE(max_guesses=G)
+        self.embed = nn.Sequential(nn.Linear(I, H), self.act, nn.Dropout(self.dropout), nn.LayerNorm(H))
         # Layers
-        for _ in range(layers):
-            self.network.append(MLPBlock(hidden_dim, self.act, dropout))
+        for _ in range(self.layers):
+            self.network.append(MLPBlock(H, self.act, self.dropout))
 
-        # Output heads
-        self.logits = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, output_dim))
-        self.value = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, 1))
+        # Output
+        self.logits = nn.Sequential(
+            MLPBlock(H, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(H),
+            nn.Linear(H, O)
+        )
+        self.value = nn.Sequential(
+            MLPBlock(H, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(H),
+            nn.Linear(H, 1)
+        )
 
-    def forward(self, x):
-        """
-        x: [batch_size, *, state_dim]
-        returns: (logits, value)
-          logits: [batch_size, *, output_dim]
-          value:  [batch_size, *, 1]
-        """
+    def forward(self, states):
+        # Unpack
+        a = states["alphabet"].flatten(start_dim=-2).float()        # [B, *, 26, 11] --> [B, *, 26*11]
+        t = self.t_ohe(states["t"])                                 # [B, *, G]
+        x = torch.cat((a, t), dim=-1)                               # [B, *, 26*11 + G] = [B, *, input_dim]
 
         # Input embedding
-        sc = self.embed(x)  # Initial embedding acts as the entire network's residual connection
+        x = self.embed(x)  # Initial embedding acts as the entire network's residual connection
 
         # Layers
-        x = sc  # Start with the embedding
         for layer in self.network:
             x = layer(x)
 
-        # Overall residual connection
-        x = (x + sc)
-
         # Output heads
-        policy_logits = self.logits(x)  # [batch_size, *, output_dim]
-        state_value = self.value(x)  # [batch_size, *, 1]
+        policy_logits = self.logits(x)              # [B, *, V]
+        state_value = self.value(x).squeeze(-1)     # [B, *]
 
         return policy_logits, state_value
 
@@ -78,52 +115,83 @@ class ActorCriticNet(nn.Module):
 ############################################
 #  SEPARATED  ACTOR–CRITIC  NETWORK
 ############################################
-class SeparatedActorCriticNet(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, layers=3, dropout=0.1, device='cpu'):
-        super().__init__()
+class SeparatedActorCriticNetConfig(Config):
+    def __init__(
+            self,
+            hidden_dim: int,
+            output_dim: int,
+            num_letters: int = 26,
+            letter_input_dim: int = 11,
+            max_guesses: int = 6,
+            layers: int = 3,
+            dropout: float = 0.1,
+        ):
+        self.model_name = "SeparatedActorCriticNet"
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_letters = num_letters
+        self.letter_input_dim = letter_input_dim
+        self.max_guesses = max_guesses
+        self.layers = layers
+        self.dropout = dropout
+
+class SeparatedActorCriticNet(WordleModel):
+    def __init__(self, cfg: SeparatedActorCriticNetConfig, device):
+        super().__init__(device)
         self.actor_network = nn.ModuleList()
         self.critic_network = nn.ModuleList()
         self.act = nn.SiLU()
-        self.dropout = nn.Dropout(dropout)
-        self.device = device
+        # Read (aliases for convenience)
+        self.cfg = cfg
+        self.hidden_dim = H = self.cfg.hidden_dim
+        self.output_dim = O = self.cfg.output_dim
+        self.num_letters = N = self.cfg.num_letters
+        self.letter_input_dim = D = self.cfg.letter_input_dim
+        self.max_guesses = G = self.cfg.max_guesses
+        self.layers = L = self.cfg.layers
+        self.dropout = self.cfg.dropout
+        input_dim = I = (N * D) + G
 
-        # Embedding layers
-        self.actor_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-        self.critic_embed = nn.Sequential(nn.Linear(input_dim, hidden_dim), self.act, self.dropout)
-
-        for _ in range(layers):
-            self.actor_network.append(MLPBlock(hidden_dim, self.act, dropout))
-            self.critic_network.append(MLPBlock(hidden_dim, self.act, dropout))
-
-        # Output heads
-        self.logits = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, output_dim))
-        self.value = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, 1))
-
-    def forward(self, x):
-        """
-        x: [batch_size, *, state_dim]
-        returns: (logits, value)
-          logits: [batch_size, *, output_dim]
-          value:  [batch_size, *, 1]
-        """
-
-        # Input embedding
-        actor_sc = self.actor_embed(x)
-        critic_sc = self.critic_embed(x)
+        # Embedding
+        self.t_ohe = TimeOHE(max_guesses=G)
+        self.actor_embed = nn.Sequential(nn.Linear(I, H), self.act, nn.Dropout(self.dropout), nn.LayerNorm(H))
+        self.critic_embed = nn.Sequential(nn.Linear(I, H), self.act, nn.Dropout(self.dropout), nn.LayerNorm(H))
 
         # Layers
-        x1, x2 = actor_sc, critic_sc  # Start with the embedding
+        for _ in range(L):
+            self.actor_network.append(MLPBlock(H, self.act, self.dropout))
+            self.critic_network.append(MLPBlock(H, self.act, self.dropout))
+
+        # Output
+        self.logits = nn.Sequential(
+            MLPBlock(H, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(H),
+            nn.Linear(H, O)
+        )
+        self.value = nn.Sequential(
+            MLPBlock(H, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(H),
+            nn.Linear(H, 1)
+        )
+    
+    def forward(self, states):
+        # Unpack
+        a = states["alphabet"].flatten(start_dim=-2).float()        # [B, *, 26, 11] --> [B, *, 26*11]
+        t = self.t_ohe(states["t"])                                 # [B, *, G]
+        x = torch.cat((a, t), dim=-1)                               # [B, *, 26*11 + G] = [B, *, input_dim]
+
+        # Input embedding
+        x1 = self.actor_embed(x)
+        x2 = self.critic_embed(x)
+
+        # Layers
         for actor_layer, critic_layer in zip(self.actor_network, self.critic_network):
             x1 = actor_layer(x1)
             x2 = critic_layer(x2)
 
-        # Overall residual connection
-        x1 = x1 + actor_sc
-        x2 = x2 + critic_sc
-
         # Output heads
-        policy_logits = self.logits(x1)  # [batch_size, output_dim]
-        state_value = self.value(x2)  # [batch_size, 1]
+        policy_logits = self.logits(x1)                 # [B, *, V]
+        state_value = self.value(x2).squeeze(-1)        # [B, *]
 
         return policy_logits, state_value
 
@@ -132,85 +200,139 @@ class SeparatedActorCriticNet(nn.Module):
 ############################################
 # DOT GUESS STATE NETWORK
 ############################################
-class DotGuessStateNet(nn.Module):
-    def __init__(self, state_input_dim, state_hidden_dim, guess_hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
-        super().__init__()
-        self.state_layers = nn.ModuleList()
-        self.guess_layers = nn.ModuleList()
+class DotGuessStateNetConfig(Config):
+    def __init__(
+            self,
+            state_hidden_dim: int,
+            guess_hidden_dim: int,
+            output_dim: int,
+            vocab_size: int = (2315 + 10657),
+            num_letters: int = 26,
+            letter_input_dim: int = 11,
+            max_guesses: int = 6,
+            layers: int = 3,
+            dropout: float = 0.1,
+        ):
+        self.model_name = "DotGuessStateNet"
         self.state_hidden_dim = state_hidden_dim
         self.guess_hidden_dim = guess_hidden_dim
         self.output_dim = output_dim
-        self.vocab_size = total_vocab_tensor.shape[0]
-        self.act = nn.SiLU()
-        self.dropout = nn.Dropout(dropout)
-        self.device = device
-        self.register_buffer("guess_states", F.one_hot(total_vocab_tensor, num_classes=26).float().permute(0, 2, 1).reshape(self.vocab_size, -1).to(torch.float32))  # [total_vocab_size, 26*5]
+        self.vocab_size = vocab_size
+        self.num_letters = num_letters
+        self.letter_input_dim = letter_input_dim
+        self.max_guesses = max_guesses
+        self.layers = layers
+        self.dropout = dropout
 
+class DotGuessStateNet(WordleModel):
+    def __init__(self, cfg: DotGuessStateNetConfig, total_vocab_tensor: Optional[torch.Tensor] = None, device=None):
+        super().__init__(device)
+        self.state_layers = nn.ModuleList()
+        self.guess_layers = nn.ModuleList()
+        self.act = nn.SiLU()
+        # Read (aliases for convenience)
+        self.cfg = cfg
+        self.vocab_size = T =self.cfg.vocab_size
+        self.state_hidden_dim = HS = self.cfg.state_hidden_dim
+        self.guess_hidden_dim = HG = self.cfg.guess_hidden_dim
+        self.output_dim = O = self.cfg.output_dim
+        self.num_letters = L = self.cfg.num_letters
+        self.letter_input_dim = IL = self.cfg.letter_input_dim
+        self.max_guesses = G = self.cfg.max_guesses
+        self.layers = self.cfg.layers
+        self.dropout = self.cfg.dropout
+        num_letter_positions = P = 5
+        state_input_dim = IS = (L * IL) + G
+        guess_input_dim = IG = (L * P)  # (One-hot of 26 letters * 5 letter possibilities)
+        
         # Embedding
-        self.state_embed = nn.Sequential(nn.LayerNorm(state_input_dim), nn.Linear(state_input_dim, state_hidden_dim), self.act, self.dropout)
-        self.guess_embed = nn.Sequential(nn.LayerNorm(130), nn.Linear(130, guess_hidden_dim), self.act, self.dropout)
+        self.t_ohe = TimeOHE(max_guesses=G)
+        self.state_embed = nn.Sequential(nn.LayerNorm(IS), nn.Linear(IS, HS), self.act, nn.Dropout(self.dropout))
+        self.guess_embed = nn.Sequential(nn.LayerNorm(IG), nn.Linear(IG, HG), self.act, nn.Dropout(self.dropout))
 
         # Layers
-        for _ in range(layers):
-            self.state_layers.append(MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout))
-            self.guess_layers.append(MLPBlock(guess_hidden_dim, activation=self.act, dropout=dropout))
+        for _ in range(self.layers):
+            self.state_layers.append(MLPBlock(HS, activation=self.act, dropout=self.dropout))
+            self.guess_layers.append(MLPBlock(HG, activation=self.act, dropout=self.dropout))
 
         # Guess state attention
-        self.state_q = nn.Sequential(nn.LayerNorm(state_hidden_dim), nn.Linear(state_hidden_dim, output_dim))
-        self.guess_k = nn.Sequential(nn.LayerNorm(guess_hidden_dim), nn.Linear(guess_hidden_dim, output_dim))
-
-        # Output heads
-        self.value = nn.Sequential(
-            MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout),
-            nn.Linear(state_hidden_dim, 1)
+        self.state_q = nn.Sequential(
+            MLPBlock(HS, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HS),
+            nn.Linear(HS, self.output_dim)
+        )
+        self.guess_k = nn.Sequential(
+            MLPBlock(HG, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HG),
+            nn.Linear(HG, self.output_dim)
         )
 
-        # Initialize guess keys
-        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, output_dim]))   # will hold cached keys in eval
+        # Output
+        self.value = nn.Sequential(
+            MLPBlock(HS, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HS),
+            nn.Linear(HS, 1)
+        )
+
+        # Buffers that are part of the model state
+        self.register_buffer("total_vocab_tensor", torch.empty(T, P, dtype=torch.long), persistent=True)
+        self.register_buffer("guess_states", torch.empty(T, IG, dtype=torch.float32), persistent=True)
+        self.register_buffer("guess_k_static", torch.empty(T, O, dtype=torch.float32), persistent=False)
+        # Initialize if provided. Otherwise will be loaded/constructed when loading state dict or the model
+        # # NOTE: the model starts in train mode, so the keys will be built on the first forward pass or .eval() call
+        if total_vocab_tensor is not None:
+            self._set_vocab_buffers(total_vocab_tensor)
+            self.guess_k_static = self._build_guess_k()
+
+    def _set_vocab_buffers(self, total_vocab_tensor: torch.Tensor):
+        device = self.total_vocab_tensor.device
+        tv = total_vocab_tensor.to(device=device, dtype=torch.long)         # [T, P]
+        self.total_vocab_tensor.copy_(tv)                                   # [T, P]
+        tv_one_hot = F.one_hot(
+            tv, num_classes=self.num_letters
+        ).to(torch.float32)                                                 # [T, P, N]
+        self.guess_states.copy_(tv_one_hot.flatten(1))                      # [T, L*P]
 
     def _build_guess_k(self):
         # Input embedding
-        sc_g = self.guess_embed(self.guess_states)  # [total_vocab_size, hidden_dim]
+        g = self.guess_embed(self.guess_states)     # [T, HG]
+
         # Layers
-        g = sc_g
         for guess_layer in self.guess_layers:
-            g = guess_layer(g)
-        g = (g + sc_g)  # [total_vocab_size, hidden_dim]
+            g = guess_layer(g)                      # [T, HG]
+        
         # Key projection
-        k = self.guess_k(g)  # [total_vocab_size, hidden_dim]
+        k = self.guess_k(g)                         # [T, O]
         return k
 
+    @torch.no_grad()
     def eval(self):
         super().eval()
-        with torch.no_grad():
-            self.guess_k_static = self._build_guess_k().clone().detach()
+        self.guess_k_static = self._build_guess_k()
         return self
 
-    def forward(self, x):
-        """
-        x: [batch_size, *, state_dim]
-        returns: (scores, value)
-          scores: [batch_size, *, total_vocab_size]
-          value:  [batch_size, *, 1]
-        """
+    def forward(self, states):
+        # Unpack
+        a = states["alphabet"].flatten(start_dim=-2).float()    # [B, *, L, IL] --> [B, *, L*IL]
+        t = self.t_ohe(states["t"])                             # [B, *, 1] --> [B, *, G]
+        x = torch.cat((a, t), dim=-1)                           # [B, *, L*IL + G] = [B, *, IS]
+
         # State embedding
-        sc_x = self.state_embed(x)  # [batch_size, *, hidden_dim]
+        x = self.state_embed(x)                                 # [B, *, HS]
+
         # Layers
-        x = sc_x
         for state_layer in self.state_layers:
-            x = state_layer(x)
-        x = (x + sc_x)  # [batch_size, *, hidden_dim]
+            x = state_layer(x)                                  # [B, *, HS]
 
         # Guess key embeddings
         k = self._build_guess_k() if self.training else self.guess_k_static
 
         # Logit
-        q = self.state_q(x)  # [batch_size, *, hidden_dim]
-        scores = (q @ k.T) / sqrt(self.output_dim)  # [batch_size, *, total_vocab_size]
+        q = self.state_q(x)                                     # [B, *, O]
+        scores = (q @ k.T) / sqrt(self.output_dim)              # [B, *, T]
 
         # Value
-        state_value = self.value(x)  # [batch_size, *, 1]
-
+        state_value = self.value(x).squeeze(-1)                 # [B, *]
         return scores, state_value
 
 
@@ -218,86 +340,283 @@ class DotGuessStateNet(nn.Module):
 ############################################
 # DOT GUESS STATE NETWORK2
 ############################################
+class DotGuessStateNet2Config(Config):
+    def __init__(
+            self,
+            state_hidden_dim: int,
+            guess_hidden_dim: int,
+            output_dim: int,
+            vocab_size: int = (2315 + 10657),
+            num_letters: int = 26,
+            letter_input_dim: int = 11,
+            max_guesses: int = 6,
+            layers: int = 3,
+            dropout: float = 0.1,
+        ):
+        self.model_name = "DotGuessStateNet2"
+        self.state_hidden_dim = state_hidden_dim
+        self.guess_hidden_dim = guess_hidden_dim
+        self.output_dim = output_dim
+        self.vocab_size = vocab_size
+        self.num_letters = num_letters
+        self.letter_input_dim = letter_input_dim
+        self.max_guesses = max_guesses
+        self.layers = layers
+        self.dropout = dropout
+
 class DotGuessStateNet2(nn.Module):
-    def __init__(self, state_input_dim, state_hidden_dim, letter_hidden_dim, output_dim, total_vocab_tensor, layers=3, dropout=0.1, device='cpu'):
-        super().__init__()
+    def __init__(self, cfg: DotGuessStateNet2Config, total_vocab_tensor: Optional[torch.Tensor] = None, device=None):
+        super().__init__(device)
         self.state_layers = nn.ModuleList()
         self.letter_layers = nn.ModuleList()
-        self.state_hidden_dim = state_hidden_dim
-        self.letter_hidden_dim = letter_hidden_dim
-        self.output_dim = output_dim
-        self.vocab_size = total_vocab_tensor.shape[0]
         self.act = nn.SiLU()
-        self.dropout = nn.Dropout(dropout)
-        self.device = device
-        offsets = 26*torch.arange(5, device=device).unsqueeze(0)  # [1, 5]
-        self.register_buffer("guess_idxs", (total_vocab_tensor + offsets).to(torch.long))  # [total_vocab_size, 5]
-        self.register_buffer("letter_mask", torch.arange(130, device=device).to(torch.long))  # [130]
+        # Read (aliases for convenience)
+        self.cfg = cfg
+        self.vocab_size = T =self.cfg.vocab_size
+        self.state_hidden_dim = HS = self.cfg.state_hidden_dim
+        self.letter_hidden_dim = HL = self.cfg.letter_hidden_dim
+        self.output_dim = O = self.cfg.output_dim
+        self.num_letters = L = self.cfg.num_letters
+        self.letter_input_dim = IL = self.cfg.letter_input_dim
+        self.max_guesses = G = self.cfg.max_guesses
+        self.layers = self.cfg.layers
+        self.dropout = self.cfg.dropout
+        num_letter_positions = P = 5
+        state_input_dim = IS = (L * IL) + G
+        self.letter_onehot_dim = OHE_L = (L * P)  # (One-hot of 26 letters * 5 letter possibilities)
 
         # Embedding
-        self.state_embed = nn.Sequential(nn.LayerNorm(state_input_dim), nn.Linear(state_input_dim, state_hidden_dim), self.act, self.dropout)
-        self.letter_embed = nn.Sequential(nn.Embedding(130, letter_hidden_dim), self.act, self.dropout)
+        self.t_ohe = TimeOHE(max_guesses=G)
+        self.state_embed = nn.Sequential(nn.LayerNorm(IS), nn.Linear(IS, HS), self.act, nn.Dropout(self.dropout))
+        self.letter_embed = nn.Embedding(IL, HL)
 
         # Layers
-        for _ in range(layers):
-            self.state_layers.append(MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout))
-            self.letter_layers.append(MLPBlock(letter_hidden_dim, activation=self.act, dropout=dropout))
+        for _ in range(self.layers):
+            self.state_layers.append(MLPBlock(HS, activation=self.act, dropout=self.dropout))
+            self.letter_layers.append(MLPBlock(HL, activation=self.act, dropout=self.dropout))
 
         # Guess state attention
-        self.state_q = nn.Sequential(nn.LayerNorm(state_hidden_dim), nn.Linear(state_hidden_dim, output_dim))
-        self.letter_k = nn.Sequential(nn.LayerNorm(letter_hidden_dim), nn.Linear(letter_hidden_dim, output_dim))
+        self.state_q = nn.Sequential(
+            MLPBlock(HS, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HS), 
+            nn.Linear(HS, O)
+        )
+        self.letter_k = nn.Sequential(
+            MLPBlock(HL, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HL), 
+            nn.Linear(HL, O)
+        )
 
         # Output heads
         self.value = nn.Sequential(
-            MLPBlock(state_hidden_dim, activation=self.act, dropout=dropout),
-            nn.Linear(state_hidden_dim, 1)
+            MLPBlock(HS, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HS), 
+            nn.Linear(HS, 1)
         )
 
-        # Initialize guess keys
-        self.register_buffer("guess_k_static", torch.empty([self.vocab_size, output_dim]))   # will hold cached keys in eval
+        # Buffers that are part of the model state
+        self.register_buffer("total_vocab_tensor", torch.empty(T, P, dtype=torch.long), persistent=True)
+        self.register_buffer("guess_idxs", torch.empty(T, P, dtype=torch.long), persistent=True)
+        self.register_buffer("letter_mask", torch.empty(IL, dtype=torch.long), persistent=True)
+        self.register_buffer("guess_k_static", torch.empty(T, O, dtype=torch.float32), persistent=False)
+        # Initialize if provided. Otherwise will be loaded/constructed when loading state dict or the model
+        # # NOTE: the model starts in train mode, so the keys will be built on the first forward pass or .eval() call
+        if total_vocab_tensor is not None:
+            self._set_vocab_buffers(total_vocab_tensor)
+            self.guess_k_static = self._build_guess_k()
+
+    def _set_vocab_buffers(self, total_vocab_tensor: torch.Tensor):
+        device = self.total_vocab_tensor.device
+        tv = total_vocab_tensor.to(device=device, dtype=torch.long)                 # [T, P]
+        self.total_vocab_tensor.copy_(tv)                                           # [T, P]
+        offsets = self.num_letters*torch.arange(
+            self.num_letter_positions, device=device
+        ).unsqueeze(0)                                                              # [1, P]
+        self.guess_idxs.copy_(tv + offsets)                                         # [T, P]
+        self.letter_mask.copy_(
+            torch.arange(self.letter_onehot_dim, device=device).to(torch.long)
+        )                                                                           # [OHE_L]
 
     def _build_guess_k(self):
         # Input embedding
-        sc_l = self.letter_embed(self.letter_mask)  # [130, hidden_dim]
+        l = self.letter_embed(self.letter_mask)     # [OHE_L] --> [HL]
+
         # Layers
-        l = sc_l
         for letter_layer in self.letter_layers:
-            l = letter_layer(l)
-        l = (l + sc_l)  # [130, hidden_dim]
+            l = letter_layer(l)                     # [HL]
+        
         # Key projection and mean
-        l = self.letter_k(l)  # [130, hidden_dim]
-        k = l[self.guess_idxs].mean(dim=-2)  # [total_vocab_size, hidden_dim]
+        l = self.letter_k(l)                        # [HL] --> [O]
+        k = l[self.guess_idxs].mean(dim=-2)         # [T, O, 5] --> [T, O]
         return k
 
+    @torch.no_grad()
     def eval(self):
         super().eval()
-        with torch.no_grad():
-            self.guess_k_static = self._build_guess_k().clone().detach()
+        self.guess_k_static = self._build_guess_k()
         return self
 
-    def forward(self, x):
-        """
-        x: [batch_size, *, state_dim]
-        returns: (scores, value)
-          scores: [batch_size, *, total_vocab_size]
-          value:  [batch_size, *, 1]
-        """
+    def forward(self, states):
+        # Unpack
+        a = states["alphabet"].flatten(start_dim=-2).float()    # [B, * , L, D] --> [B, *, 26*11]
+        t = self.t_ohe(states["t"])                             # [B, *, 1] --> [B, *, G]
+        x = torch.cat((a, t), dim=-1)                           # [B, *, L*IL + G] = [B, *, state_input_dim]
+        
         # State embedding
-        sc_x = self.state_embed(x)  # [batch_size, *, hidden_dim]
+        x = self.state_embed(x)                                 # [B, *, HS]
+
         # Layers
-        x = sc_x
         for state_layer in self.state_layers:
-            x = state_layer(x)
-        x = (x + sc_x)  # [batch_size, *, hidden_dim]
+            x = state_layer(x)                                  # [B, *, HS]
+
+        # Guess key embeddings
+        k = self._build_guess_k() if self.training else self.guess_k_static     # [V, O]
+
+        # Logit
+        q = self.state_q(x)                                     # [B, *, O]
+        scores = (q @ k.T) / sqrt(self.output_dim)              # [B, *, V]
+
+        # Value
+        state_value = self.value(x).squeeze(-1)                 # [B, *]
+        return scores, state_value
+
+
+
+############################################
+# Wordle Transformer
+############################################
+class WordleTransformerConfig(Config):
+    def __init__(
+            self,
+            state_hidden_dim: int,
+            guess_hidden_dim: int,
+            output_dim: int,
+            vocab_size: int = (2315 + 10657),
+            num_letters: int = 26,
+            letter_input_dim: int = 11,
+            max_guesses: int = 6,
+            layers: int = 3,
+            dropout: float = 0.1,
+        ):
+        self.model_name = "WordleTransformer"
+        self.state_hidden_dim = state_hidden_dim
+        self.guess_hidden_dim = guess_hidden_dim
+        self.output_dim = output_dim
+        self.vocab_size = vocab_size
+        self.num_letters = num_letters
+        self.letter_input_dim = letter_input_dim
+        self.max_guesses = max_guesses
+        self.layers = layers
+        self.dropout = dropout
+
+class WordleTransformer(WordleModel):
+    def __init__(self, cfg: WordleTransformerConfig, total_vocab_tensor: Optional[torch.Tensor] = None, device=None):
+        super().__init__(device)
+        self.state_layers = nn.ModuleList()
+        self.guess_layers = nn.ModuleList()
+        self.act = nn.SiLU()
+        # Read (aliases for convenience)
+        self.cfg = cfg
+        self.vocab_size = T =self.cfg.vocab_size
+        self.state_hidden_dim = HS = self.cfg.state_hidden_dim
+        self.guess_hidden_dim = HG = self.cfg.guess_hidden_dim
+        self.output_dim = O = self.cfg.output_dim
+        self.num_letters = L = self.cfg.num_letters
+        self.letter_input_dim = IL = self.cfg.letter_input_dim
+        self.max_guesses = G = self.cfg.max_guesses
+        self.layers = self.cfg.layers
+        self.dropout = self.cfg.dropout
+        num_letter_positions = P = 5
+        state_input_dim = IS = (L * IL) + G
+        guess_input_dim = IG = (L * P)  # (One-hot of 26 letters * 5 letter possibilities)
+        
+        # Embedding
+        self.time_embed = nn.Embedding(G, HS)
+        self.state_embed = nn.Sequential(nn.Linear(IS, HS), nn.LayerNorm(HS))
+        self.guess_embed = nn.Sequential(nn.Linear(IG, HG), nn.LayerNorm(HG))
+
+        # Layers
+        for _ in range(self.layers):
+            self.state_layers.append(TransformerBlock(HS, activation=self.act, dropout=self.dropout))
+            self.guess_layers.append(TransformerBlock(HG, activation=self.act, dropout=self.dropout))
+
+        # Guess state attention
+        self.state_q = nn.Sequential(
+            MLPBlock(HS, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HS),
+            nn.Linear(HS, O),
+            nn.LayerNorm(O)
+        )
+        self.guess_k = nn.Sequential(
+            MLPBlock(HG, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HG),
+            nn.Linear(HG, O),
+            nn.LayerNorm(O)
+        )
+
+        # Output
+        self.value = nn.Sequential(
+            MLPBlock(HS, activation=self.act, dropout=self.dropout),
+            nn.LayerNorm(HS),
+            nn.Linear(HS, 1)
+        )
+
+        # Buffers that are part of the model state
+        self.register_buffer("total_vocab_tensor", torch.empty(T, P, dtype=torch.long), persistent=True)
+        self.register_buffer("guess_states", torch.empty(T, IG, dtype=torch.float32), persistent=True)
+        self.register_buffer("guess_k_static", torch.empty(T, O, dtype=torch.float32), persistent=False)
+        # Initialize if provided. Otherwise will be loaded/constructed when loading state dict or the model
+        # # NOTE: the model starts in train mode, so the keys will be built on the first forward pass or .eval() call
+        if total_vocab_tensor is not None:
+            self._set_vocab_buffers(total_vocab_tensor)
+            self.guess_k_static = self._build_guess_k()
+
+    def _set_vocab_buffers(self, total_vocab_tensor: torch.Tensor):
+        device = self.total_vocab_tensor.device
+        tv = total_vocab_tensor.to(device=device, dtype=torch.long)         # [T, P]
+        self.total_vocab_tensor.copy_(tv)                                   # [T, P]
+        tv_one_hot = F.one_hot(
+            tv, num_classes=self.num_letters
+        ).to(torch.float32)                                                 # [T, P, N]
+        self.guess_states.copy_(tv_one_hot.flatten(1))                      # [T, L*P]
+
+    def _build_guess_k(self):
+        # Input embedding
+        g = self.guess_embed(self.guess_states)     # [T, HG]
+
+        # Layers
+        for guess_layer in self.guess_layers:
+            g = guess_layer(g)                      # [T, HG]
+        
+        # Key projection
+        k = self.guess_k(g)                         # [T, O]
+        return k
+
+    @torch.no_grad()
+    def eval(self):
+        super().eval()
+        self.guess_k_static = self._build_guess_k()
+        return self
+
+    def forward(self, states):
+        # Unpack
+        a = states["alphabet"].flatten(start_dim=-2).float()        # [B, *, L, IL] --> [B, *, L*IL]
+        t = states["t"].squeeze().float()                           # [B, *, 1] --> [B, *]
+
+        # State embedding
+        x = self.state_embed(x) + self.time_embed(t)                # [B, *, HS]
+
+        # Layers
+        for state_layer in self.state_layers:
+            x = state_layer(x)                                      # [B, *, HS]
 
         # Guess key embeddings
         k = self._build_guess_k() if self.training else self.guess_k_static
 
         # Logit
-        q = self.state_q(x)  # [batch_size, *, hidden_dim]
-        scores = (q @ k.T) / sqrt(self.output_dim)  # [batch_size, *, total_vocab_size]
+        q = self.state_q(x)                                         # [B, *, O]
+        scores = (q @ k.T) / sqrt(self.output_dim)                  # [B, *, T]
 
         # Value
-        state_value = self.value(x)  # [batch_size, *, 1]
-
+        state_value = self.value(x).squeeze(-1)                     # [B, *]
         return scores, state_value
