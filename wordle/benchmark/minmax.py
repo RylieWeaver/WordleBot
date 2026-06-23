@@ -1,6 +1,7 @@
 # General
 import os
 from tqdm import tqdm
+import numpy as np
 
 # Torch
 import torch
@@ -17,24 +18,25 @@ def select_action_minmax(alphabet_state, total_vocab_tensor, target_vocab_tensor
     target_vocab_size = target_vocab_tensor.shape[0]
 
     # Guess the target if it's the only thing possible. Otherwise, guess the minmax entropy
-    if target_mask.sum(dim=-1) == 1:
-        return (total_vocab_size - target_vocab_size) + torch.where(target_mask)[0]
+    if target_mask.sum(dim=-1) <= 2:
+        return (total_vocab_size - target_vocab_size) + torch.where(target_mask)[0][0]
     
     # Guess the best starter word (is the same for all target words and saves time to just compute once)
     if first_guess:
-        return torch.tensor(113, dtype=torch.int64, device=device)  # 'aesir' is the best starter word for minmax strategy
-    
+        guess_idx = torch.tensor(113, dtype=torch.int64, device=device)  # 'aesir' is the best starter word for minmax strategy
+        return guess_idx
+
     # Get the entropy table
     possible_entropies = get_entropy_table(alphabet_state, total_vocab_tensor, target_vocab_tensor, target_vocab_states, target_mask)  # [total_vocab_size, masked_target_vocab_size]
 
     # Find minmax guess
-    max_entropies = possible_entropies.max(dim=-1)  # [total_vocab_size]
+    max_entropies = possible_entropies.max(dim=-1).values  # [total_vocab_size]
     guess_idx = max_entropies.argmin(dim=-1)  # [1]
 
     return guess_idx  # [1]
 
 
-def get_minmax_stats(total_vocab, target_vocab, checkpoint=False):
+def get_minmax_stats(total_vocab, target_vocab, checkpoint=True):
     """
     Get the statistics for the minmax strategy.
     
@@ -65,7 +67,7 @@ def get_minmax_stats(total_vocab, target_vocab, checkpoint=False):
     target_vocab_states = construct_vocab_states(words_to_tensor(target_vocab).to(device))  # [target_vocab_size, 26, 11]
 
     # Do each possible target word
-    for i in tqdm(range(len(target_vocab)), desc="Evaluating minmax"):
+    for i in tqdm(range(1270, len(target_vocab)), desc="Evaluating minmax"):
         # Initialize
         alphabet_state = torch.zeros((26, 11), dtype=torch.float32, device=device)  # [26, 11]
         correct = torch.tensor(0)  # [1]
@@ -73,7 +75,7 @@ def get_minmax_stats(total_vocab, target_vocab, checkpoint=False):
         # Do all the guesses and stop if got correct
         guesses = torch.tensor(0)  # Guess count
         while guesses < max_guesses and not correct.bool():
-            guess_idx = select_action_minmax(alphabet_state, total_vocab_tensor, target_vocab_tensor, target_vocab_states, target_mask, first_guess=((guesses==0) and (len(total_vocab)==12973)))  # Only use first guess for full vocab as well (12973 = 10657+2316)
+            guess_idx = select_action_minmax(alphabet_state, total_vocab_tensor, target_vocab_tensor, target_vocab_states, target_mask, first_guess=((guesses==0) and (len(total_vocab)==12972)))  # Only use first guess for full vocab as well (12973 = 10657+2316)
             alphabet_state, correct, target_mask = simulate_action_benchmark(alphabet_state, total_vocab_tensor[guess_idx.squeeze()], target_vocab_tensor[i], target_vocab_states)  # [26, 11]
             guesses += 1
 
@@ -83,7 +85,7 @@ def get_minmax_stats(total_vocab, target_vocab, checkpoint=False):
 
         # Save the correct and guess to a file
         if checkpoint:
-            with open(os.path.join(stats_dir, f"word_{i}.txt"), "a") as f:
+            with open(os.path.join(stats_dir, f"word_{i}.txt"), "w") as f:
                 f.write(f"Target: {target_vocab[i]}, Correct: {correct.item()}, Guesses: {guesses.item()}\n")
 
     # Average stats
@@ -95,11 +97,12 @@ def get_minmax_stats(total_vocab, target_vocab, checkpoint=False):
 
 if __name__ == "__main__":
     # Get vocab
-    # total_vocab, target_vocab = get_vocab(guess_vocab_size=1000, target_vocab_size=100)
-    total_vocab, target_vocab = get_vocab()
+    target_vocab = get_vocab(vocab_type="target")                               # [T]
+    nontarget_vocab = get_vocab(vocab_type="nontarget")
+    total_vocab = np.concatenate((target_vocab, nontarget_vocab), axis=0)       # [V]
 
     # Get stats
-    avg_correct, avg_guesses = get_minmax_stats(total_vocab, target_vocab, checkpoint=False)
+    avg_correct, avg_guesses = get_minmax_stats(total_vocab, target_vocab, checkpoint=True)
     print(f"Average correct: {avg_correct}")
     print(f"Average guesses: {avg_guesses}")
 
