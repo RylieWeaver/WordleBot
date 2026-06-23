@@ -23,9 +23,9 @@ class MHA(nn.Module):
 
     def forward(self, x):
         d = math.sqrt(x.shape[-1])
-        q, k, v = self.qkv(x).chunk(3, dim=-1)                  # [B, 5, D] each
-        a = torch.einsum("b i d, b j d -> b i j", q, k) / d     # [B, 5, 5]
-        v = torch.einsum("b i j, b j d -> b i d", a, v)         # [B, 5, D]
+        q, k, v = self.qkv(x).chunk(3, dim=-1)                  # [..., S, D] each
+        a = torch.einsum("... i d, ... j d -> ... i j", q, k) / d
+        v = torch.einsum("... i j, ... j d -> ... i d", a, v)
         return v
 
 class FF(nn.Module):

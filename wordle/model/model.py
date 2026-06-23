@@ -1,4 +1,5 @@
 # General
+import math
 from typing import Optional
 from math import sqrt
 
@@ -9,7 +10,7 @@ import torch.nn.functional as F
 
 # Wordle
 from wordle.utils import Config
-from .base import WordleModel
+from .base import WordleModel, DotWordleModel
 from .utils import MLPBlock, TransformerBlock
 
 
@@ -33,6 +34,35 @@ class TimeOHE(nn.Module):
         return self.lu_table[idx]
 
 
+def _linear_flops(input_dim, output_dim, bias=True, tokens=1):
+    return tokens * ((2 * input_dim * output_dim) + (output_dim if bias else 0))
+
+
+def _layernorm_flops(dim, tokens=1):
+    return tokens * 2 * dim
+
+
+def _mlp_block_flops(dim, tokens=1):
+    return _layernorm_flops(dim, tokens=tokens) + _linear_flops(dim, dim, tokens=tokens)
+
+
+def _ff_flops(dim, tokens=1):
+    return _linear_flops(dim, 4 * dim, tokens=tokens) + _linear_flops(4 * dim, dim, tokens=tokens)
+
+
+def _mha_flops(dim, bias=False, tokens=1):
+    return _linear_flops(dim, 3 * dim, bias=bias, tokens=tokens)
+
+
+def _transformer_block_flops(dim, bias=False, tokens=1):
+    return (
+        _layernorm_flops(dim, tokens=tokens) +
+        _mha_flops(dim, bias=bias, tokens=tokens) +
+        _layernorm_flops(dim, tokens=tokens) +
+        _ff_flops(dim, tokens=tokens)
+    )
+
+
 ############################################
 # ACTOR-CRITIC NETWORK
 ############################################
@@ -46,6 +76,7 @@ class ActorCriticNetConfig(Config):
             max_guesses: int = 6,
             layers: int = 3,
             dropout: float = 0.1,
+            use_inductive_biases: bool = True,
         ):
         self.model_name = "ActorCriticNet"
         self.hidden_dim = hidden_dim
@@ -55,10 +86,11 @@ class ActorCriticNetConfig(Config):
         self.max_guesses = max_guesses
         self.layers = layers
         self.dropout = dropout
+        self.use_inductive_biases = use_inductive_biases
 
 class ActorCriticNet(WordleModel):
-    def __init__(self, cfg: ActorCriticNetConfig, device):
-        super().__init__(device)
+    def __init__(self, cfg: ActorCriticNetConfig, device=None):
+        super().__init__(use_inductive_biases=cfg.use_inductive_biases, device=device)
         self.network = nn.ModuleList()
         self.act = nn.SiLU()
         # Read (aliases for convenience)
@@ -89,6 +121,16 @@ class ActorCriticNet(WordleModel):
             MLPBlock(H, activation=self.act, dropout=self.dropout),
             nn.LayerNorm(H),
             nn.Linear(H, 1)
+        )
+
+    def forward_flops(self, num_states: int = 1):
+        I = (self.num_letters * self.letter_input_dim) + self.max_guesses
+        H = self.hidden_dim
+        return num_states * (
+            _linear_flops(I, H) + _layernorm_flops(H) +
+            self.layers * _mlp_block_flops(H) +
+            _mlp_block_flops(H) + _layernorm_flops(H) + _linear_flops(H, self.output_dim) +
+            _mlp_block_flops(H) + _layernorm_flops(H) + _linear_flops(H, 1)
         )
 
     def forward(self, states):
@@ -125,6 +167,7 @@ class SeparatedActorCriticNetConfig(Config):
             max_guesses: int = 6,
             layers: int = 3,
             dropout: float = 0.1,
+            use_inductive_biases: bool = True,
         ):
         self.model_name = "SeparatedActorCriticNet"
         self.hidden_dim = hidden_dim
@@ -134,10 +177,11 @@ class SeparatedActorCriticNetConfig(Config):
         self.max_guesses = max_guesses
         self.layers = layers
         self.dropout = dropout
+        self.use_inductive_biases = use_inductive_biases
 
 class SeparatedActorCriticNet(WordleModel):
-    def __init__(self, cfg: SeparatedActorCriticNetConfig, device):
-        super().__init__(device)
+    def __init__(self, cfg: SeparatedActorCriticNetConfig, device=None):
+        super().__init__(use_inductive_biases=cfg.use_inductive_biases, device=device)
         self.actor_network = nn.ModuleList()
         self.critic_network = nn.ModuleList()
         self.act = nn.SiLU()
@@ -172,6 +216,16 @@ class SeparatedActorCriticNet(WordleModel):
             MLPBlock(H, activation=self.act, dropout=self.dropout),
             nn.LayerNorm(H),
             nn.Linear(H, 1)
+        )
+
+    def forward_flops(self, num_states: int = 1):
+        I = (self.num_letters * self.letter_input_dim) + self.max_guesses
+        H = self.hidden_dim
+        return num_states * (
+            2 * (_linear_flops(I, H) + _layernorm_flops(H)) +
+            2 * self.layers * _mlp_block_flops(H) +
+            _mlp_block_flops(H) + _layernorm_flops(H) + _linear_flops(H, self.output_dim) +
+            _mlp_block_flops(H) + _layernorm_flops(H) + _linear_flops(H, 1)
         )
     
     def forward(self, states):
@@ -212,6 +266,7 @@ class DotGuessStateNetConfig(Config):
             max_guesses: int = 6,
             layers: int = 3,
             dropout: float = 0.1,
+            use_inductive_biases: bool = True,
         ):
         self.model_name = "DotGuessStateNet"
         self.state_hidden_dim = state_hidden_dim
@@ -223,10 +278,16 @@ class DotGuessStateNetConfig(Config):
         self.max_guesses = max_guesses
         self.layers = layers
         self.dropout = dropout
+        self.use_inductive_biases = use_inductive_biases
 
-class DotGuessStateNet(WordleModel):
-    def __init__(self, cfg: DotGuessStateNetConfig, total_vocab_tensor: Optional[torch.Tensor] = None, device=None):
-        super().__init__(device)
+class DotGuessStateNet(DotWordleModel):
+    def __init__(
+            self,
+            cfg: DotGuessStateNetConfig,
+            total_vocab_tensor: Optional[torch.Tensor] = None,
+            device=None
+        ):
+        super().__init__(use_inductive_biases=cfg.use_inductive_biases, device=device)
         self.state_layers = nn.ModuleList()
         self.guess_layers = nn.ModuleList()
         self.act = nn.SiLU()
@@ -259,16 +320,18 @@ class DotGuessStateNet(WordleModel):
         self.state_q = nn.Sequential(
             MLPBlock(HS, activation=self.act, dropout=self.dropout),
             nn.LayerNorm(HS),
-            nn.Linear(HS, self.output_dim)
+            nn.Linear(HS, self.output_dim, bias=False)
         )
         self.guess_k = nn.Sequential(
             MLPBlock(HG, activation=self.act, dropout=self.dropout),
             nn.LayerNorm(HG),
-            nn.Linear(HG, self.output_dim)
+            nn.Linear(HG, self.output_dim, bias=False)
         )
+        self.logit_scale = nn.Parameter(torch.tensor(1.0))
 
-        # Output
+        # Value
         self.value = nn.Sequential(
+            nn.Linear(HS + IG, HS),
             MLPBlock(HS, activation=self.act, dropout=self.dropout),
             nn.LayerNorm(HS),
             nn.Linear(HS, 1)
@@ -282,7 +345,26 @@ class DotGuessStateNet(WordleModel):
         # # NOTE: the model starts in train mode, so the keys will be built on the first forward pass or .eval() call
         if total_vocab_tensor is not None:
             self._set_vocab_buffers(total_vocab_tensor)
-            self.guess_k_static = self._build_guess_k()
+            self.refresh_static_cache()
+
+    def forward_flops(self, num_states: int = 1):
+        IS = (self.num_letters * self.letter_input_dim) + self.max_guesses
+        IG = self.num_letters * 5
+        HS = self.state_hidden_dim
+        HG = self.guess_hidden_dim
+        state_flops = (
+            _layernorm_flops(IS) + _linear_flops(IS, HS) +
+            self.layers * _mlp_block_flops(HS) +
+            _mlp_block_flops(HS) + _layernorm_flops(HS) + _linear_flops(HS, self.output_dim, bias=False) +
+            _linear_flops(HS + IG, HS) + _mlp_block_flops(HS) + _layernorm_flops(HS) + _linear_flops(HS, 1)
+        )
+        guess_flops = (
+            _layernorm_flops(IG) + _linear_flops(IG, HG) +
+            self.layers * _mlp_block_flops(HG) +
+            _mlp_block_flops(HG) + _layernorm_flops(HG) + _linear_flops(HG, self.output_dim, bias=False)
+        )
+        cache_flops = self.vocab_size * guess_flops if self.training else 0
+        return (num_states * state_flops) + cache_flops
 
     def _set_vocab_buffers(self, total_vocab_tensor: torch.Tensor):
         device = self.total_vocab_tensor.device
@@ -305,34 +387,36 @@ class DotGuessStateNet(WordleModel):
         k = self.guess_k(g)                         # [T, O]
         return k
 
-    @torch.no_grad()
-    def eval(self):
-        super().eval()
-        self.guess_k_static = self._build_guess_k()
-        return self
-
     def forward(self, states):
         # Unpack
-        a = states["alphabet"].flatten(start_dim=-2).float()    # [B, *, L, IL] --> [B, *, L*IL]
-        t = self.t_ohe(states["t"])                             # [B, *, 1] --> [B, *, G]
-        x = torch.cat((a, t), dim=-1)                           # [B, *, L*IL + G] = [B, *, IS]
+        a = states["alphabet"].flatten(start_dim=-2).float()        # [B, *, L, IL] --> [B, *, L*IL]
+        t = self.t_ohe(states["t"])                                 # [B, *, 1] --> [B, *, G]
+        x = torch.cat((a, t), dim=-1)                               # [B, *, L*IL + G] = [B, *, IS]
 
         # State embedding
-        x = self.state_embed(x)                                 # [B, *, HS]
+        x = self.state_embed(x)                                     # [B, *, HS]
 
         # Layers
         for state_layer in self.state_layers:
-            x = state_layer(x)                                  # [B, *, HS]
+            x = state_layer(x)                                      # [B, *, HS]
 
         # Guess key embeddings
         k = self._build_guess_k() if self.training else self.guess_k_static
 
         # Logit
-        q = self.state_q(x)                                     # [B, *, O]
-        scores = (q @ k.T) / sqrt(self.output_dim)              # [B, *, T]
-
+        q = self.state_q(x)                                         # [B, *, O]
+        # logit_scale = self.logit_scale.clamp(min=0.01, max=100.0)
+        qk_scale = 1 / sqrt(self.output_dim)
+        scores = (q @ k.T) * qk_scale               # [B, *, T]
+        # q = F.normalize(q, dim=-1)
+        # k = F.normalize(k, dim=-1)
+        # scores = logit_scale * (q @ k.T)
+        
         # Value
-        state_value = self.value(x).squeeze(-1)                 # [B, *]
+        h = self.guess_states[states["idx"]]                        # [B, *, IG]
+        state_value = (
+            self.value(torch.cat((x, h), dim=-1))
+        ).squeeze(-1)                                               # [B, *]
         return scores, state_value
 
 
@@ -352,6 +436,7 @@ class DotGuessStateNet2Config(Config):
             max_guesses: int = 6,
             layers: int = 3,
             dropout: float = 0.1,
+            use_inductive_biases: bool = True,
         ):
         self.model_name = "DotGuessStateNet2"
         self.state_hidden_dim = state_hidden_dim
@@ -363,10 +448,17 @@ class DotGuessStateNet2Config(Config):
         self.max_guesses = max_guesses
         self.layers = layers
         self.dropout = dropout
+        self.letter_hidden_dim = guess_hidden_dim
+        self.use_inductive_biases = use_inductive_biases
 
-class DotGuessStateNet2(nn.Module):
-    def __init__(self, cfg: DotGuessStateNet2Config, total_vocab_tensor: Optional[torch.Tensor] = None, device=None):
-        super().__init__(device)
+class DotGuessStateNet2(DotWordleModel):
+    def __init__(
+            self,
+            cfg: DotGuessStateNet2Config,
+            total_vocab_tensor: Optional[torch.Tensor] = None,
+            device=None
+        ):
+        super().__init__(use_inductive_biases=cfg.use_inductive_biases, device=device)
         self.state_layers = nn.ModuleList()
         self.letter_layers = nn.ModuleList()
         self.act = nn.SiLU()
@@ -382,13 +474,14 @@ class DotGuessStateNet2(nn.Module):
         self.layers = self.cfg.layers
         self.dropout = self.cfg.dropout
         num_letter_positions = P = 5
+        self.num_letter_positions = P
         state_input_dim = IS = (L * IL) + G
         self.letter_onehot_dim = OHE_L = (L * P)  # (One-hot of 26 letters * 5 letter possibilities)
 
         # Embedding
         self.t_ohe = TimeOHE(max_guesses=G)
         self.state_embed = nn.Sequential(nn.LayerNorm(IS), nn.Linear(IS, HS), self.act, nn.Dropout(self.dropout))
-        self.letter_embed = nn.Embedding(IL, HL)
+        self.letter_embed = nn.Embedding(OHE_L, HL)
 
         # Layers
         for _ in range(self.layers):
@@ -417,13 +510,33 @@ class DotGuessStateNet2(nn.Module):
         # Buffers that are part of the model state
         self.register_buffer("total_vocab_tensor", torch.empty(T, P, dtype=torch.long), persistent=True)
         self.register_buffer("guess_idxs", torch.empty(T, P, dtype=torch.long), persistent=True)
-        self.register_buffer("letter_mask", torch.empty(IL, dtype=torch.long), persistent=True)
+        self.register_buffer("letter_mask", torch.empty(OHE_L, dtype=torch.long), persistent=True)
         self.register_buffer("guess_k_static", torch.empty(T, O, dtype=torch.float32), persistent=False)
         # Initialize if provided. Otherwise will be loaded/constructed when loading state dict or the model
         # # NOTE: the model starts in train mode, so the keys will be built on the first forward pass or .eval() call
         if total_vocab_tensor is not None:
             self._set_vocab_buffers(total_vocab_tensor)
-            self.guess_k_static = self._build_guess_k()
+            self.refresh_static_cache()
+
+    def forward_flops(self, num_states: int = 1):
+        IS = (self.num_letters * self.letter_input_dim) + self.max_guesses
+        OHE_L = self.num_letters * 5
+        HS = self.state_hidden_dim
+        HL = self.letter_hidden_dim
+        state_flops = (
+            _layernorm_flops(IS) + _linear_flops(IS, HS) +
+            self.layers * _mlp_block_flops(HS) +
+            _mlp_block_flops(HS) + _layernorm_flops(HS) + _linear_flops(HS, self.output_dim) +
+            _mlp_block_flops(HS) + _layernorm_flops(HS) + _linear_flops(HS, 1)
+        )
+        letter_flops = (
+            self.layers * _mlp_block_flops(HL, tokens=OHE_L) +
+            _mlp_block_flops(HL, tokens=OHE_L) +
+            _layernorm_flops(HL, tokens=OHE_L) +
+            _linear_flops(HL, self.output_dim, tokens=OHE_L)
+        )
+        cache_flops = letter_flops if self.training else 0
+        return (num_states * state_flops) + cache_flops
 
     def _set_vocab_buffers(self, total_vocab_tensor: torch.Tensor):
         device = self.total_vocab_tensor.device
@@ -446,15 +559,9 @@ class DotGuessStateNet2(nn.Module):
             l = letter_layer(l)                     # [HL]
         
         # Key projection and mean
-        l = self.letter_k(l)                        # [HL] --> [O]
-        k = l[self.guess_idxs].mean(dim=-2)         # [T, O, 5] --> [T, O]
+        l = self.letter_k(l)                        # [OHE_L, O]
+        k = l[self.guess_idxs].mean(dim=-2)         # [T, P, O] --> [T, O]
         return k
-
-    @torch.no_grad()
-    def eval(self):
-        super().eval()
-        self.guess_k_static = self._build_guess_k()
-        return self
 
     def forward(self, states):
         # Unpack
@@ -497,6 +604,7 @@ class WordleTransformerConfig(Config):
             max_guesses: int = 6,
             layers: int = 3,
             dropout: float = 0.1,
+            use_inductive_biases: bool = True,
         ):
         self.model_name = "WordleTransformer"
         self.state_hidden_dim = state_hidden_dim
@@ -508,10 +616,16 @@ class WordleTransformerConfig(Config):
         self.max_guesses = max_guesses
         self.layers = layers
         self.dropout = dropout
+        self.use_inductive_biases = use_inductive_biases
 
-class WordleTransformer(WordleModel):
-    def __init__(self, cfg: WordleTransformerConfig, total_vocab_tensor: Optional[torch.Tensor] = None, device=None):
-        super().__init__(device)
+class WordleTransformer(DotWordleModel):
+    def __init__(
+            self,
+            cfg: WordleTransformerConfig,
+            total_vocab_tensor: Optional[torch.Tensor] = None,
+            device=None
+        ):
+        super().__init__(use_inductive_biases=cfg.use_inductive_biases, device=device)
         self.state_layers = nn.ModuleList()
         self.guess_layers = nn.ModuleList()
         self.act = nn.SiLU()
@@ -531,7 +645,7 @@ class WordleTransformer(WordleModel):
         guess_input_dim = IG = (L * P)  # (One-hot of 26 letters * 5 letter possibilities)
         
         # Embedding
-        self.time_embed = nn.Embedding(G, HS)
+        self.t_ohe = TimeOHE(max_guesses=G)
         self.state_embed = nn.Sequential(nn.Linear(IS, HS), nn.LayerNorm(HS))
         self.guess_embed = nn.Sequential(nn.Linear(IG, HG), nn.LayerNorm(HG))
 
@@ -569,7 +683,36 @@ class WordleTransformer(WordleModel):
         # # NOTE: the model starts in train mode, so the keys will be built on the first forward pass or .eval() call
         if total_vocab_tensor is not None:
             self._set_vocab_buffers(total_vocab_tensor)
-            self.guess_k_static = self._build_guess_k()
+            self.refresh_static_cache()
+
+    def forward_flops(self, num_states: int = 1):
+        IS = (self.num_letters * self.letter_input_dim) + self.max_guesses
+        IG = self.num_letters * 5
+        HS = self.state_hidden_dim
+        HG = self.guess_hidden_dim
+        state_tokens = 1  # Current implementation flattens alphabet state before state_embed.
+        guess_tokens = 1  # Current implementation flattens each candidate word before guess_embed.
+        state_flops = (
+            _linear_flops(IS, HS, tokens=state_tokens) + _layernorm_flops(HS, tokens=state_tokens) +
+            self.layers * _transformer_block_flops(HS, tokens=state_tokens) +
+            _mlp_block_flops(HS, tokens=state_tokens) +
+            _layernorm_flops(HS, tokens=state_tokens) +
+            _linear_flops(HS, self.output_dim, tokens=state_tokens) +
+            _layernorm_flops(self.output_dim, tokens=state_tokens) +
+            _mlp_block_flops(HS, tokens=state_tokens) +
+            _layernorm_flops(HS, tokens=state_tokens) +
+            _linear_flops(HS, 1, tokens=state_tokens)
+        )
+        guess_flops = (
+            _linear_flops(IG, HG, tokens=guess_tokens) + _layernorm_flops(HG, tokens=guess_tokens) +
+            self.layers * _transformer_block_flops(HG, tokens=guess_tokens) +
+            _mlp_block_flops(HG, tokens=guess_tokens) +
+            _layernorm_flops(HG, tokens=guess_tokens) +
+            _linear_flops(HG, self.output_dim, tokens=guess_tokens) +
+            _layernorm_flops(self.output_dim, tokens=guess_tokens)
+        )
+        cache_flops = self.vocab_size * guess_flops if self.training else 0
+        return (num_states * state_flops) + cache_flops
 
     def _set_vocab_buffers(self, total_vocab_tensor: torch.Tensor):
         device = self.total_vocab_tensor.device
@@ -582,33 +725,30 @@ class WordleTransformer(WordleModel):
 
     def _build_guess_k(self):
         # Input embedding
-        g = self.guess_embed(self.guess_states)     # [T, HG]
+        g = self.guess_embed(self.guess_states).unsqueeze(-2)     # [T, 1, HG]
 
         # Layers
         for guess_layer in self.guess_layers:
-            g = guess_layer(g)                      # [T, HG]
+            g = guess_layer(g)                                      # [T, 1, HG]
+        g = g.squeeze(-2)                                           # [T, HG]
         
         # Key projection
         k = self.guess_k(g)                         # [T, O]
         return k
 
-    @torch.no_grad()
-    def eval(self):
-        super().eval()
-        self.guess_k_static = self._build_guess_k()
-        return self
-
     def forward(self, states):
         # Unpack
         a = states["alphabet"].flatten(start_dim=-2).float()        # [B, *, L, IL] --> [B, *, L*IL]
-        t = states["t"].squeeze().float()                           # [B, *, 1] --> [B, *]
+        t = self.t_ohe(states["t"])                                 # [B, *, G]
+        x = torch.cat((a, t), dim=-1)                               # [B, *, L*IL + G] = [B, *, IS]
 
         # State embedding
-        x = self.state_embed(x) + self.time_embed(t)                # [B, *, HS]
+        x = self.state_embed(x).unsqueeze(-2)                       # [B, *, 1, HS]
 
         # Layers
         for state_layer in self.state_layers:
-            x = state_layer(x)                                      # [B, *, HS]
+            x = state_layer(x)                                      # [B, *, 1, HS]
+        x = x.squeeze(-2)                                           # [B, *, HS]
 
         # Guess key embeddings
         k = self._build_guess_k() if self.training else self.guess_k_static

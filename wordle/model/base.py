@@ -1,4 +1,5 @@
 # General
+import warnings
 
 # Torch
 import torch
@@ -13,12 +14,19 @@ import torch.nn.functional as F
 # BASE WORDLE MODEL
 ##############################################
 class WordleModel(nn.Module):
-    def __init__(self, device):
+    def __init__(self, device, use_inductive_biases=True):
         super().__init__()
         self.device = device
+        self.use_inductive_biases = use_inductive_biases
 
     def forward(self, states):
         pass
+
+    def forward_flops(self, num_states: int = 1):
+        raise NotImplementedError
+    
+    def backward_flops(self, num_states: int = 1):
+        return 2 * self.forward_flops(num_states=num_states)
     
     def _inductive_biases(self, states):
         """
@@ -79,8 +87,9 @@ class WordleModel(nn.Module):
         # Set the probabilities of the zero rows (should only happen for inactive episodes, 
         # but can sometimes happen from very small values in the softmax probability) option
         # 1 is masked probs, option 2 is valid actions, and option 3 is uniform distribution
-        zero_idx = (probs.sum(dim=-1) < 1e-1)  # [batch_size, *]
+        zero_idx = (probs.sum(dim=-1) < 1e-6)  # [batch_size, *]
         if zero_idx.any():
+            warnings.warn(f"Found {zero_idx.sum()} rows with all zero probabilities.")
             has_valid = (valid_mask[zero_idx].sum(dim=-1, keepdim=True) > 0.99)                     # [zero_idx, 1]
             uniform = (
                 torch.ones_like(probs[zero_idx], device=device, dtype=torch.float32) /              # [zero_idx, *, V]
@@ -91,7 +100,7 @@ class WordleModel(nn.Module):
         # Normalize the probabilities
         probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-9)                             # [B, *, V]
         while (probs.sum(-1) - 1.0).abs().max() > 1e-6:
-            print("Warning: probabilities sum to more or less than 1.0")
+            warnings.warn("Probabilities sum to more or less than 1.0")
             probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-9)
 
         return probs
@@ -134,17 +143,22 @@ class WordleModel(nn.Module):
             "mixed_probs_masked": mixed_probs_masked
         }
         return probs
+
+    def _valid_actions(self, states):
+        if self.use_inductive_biases:
+            return self._inductive_biases(states)
+        return torch.ones_like(states["total_target_mask"], dtype=torch.bool)
     
     def predict(self, states, alpha, temperature):
         logits, values = self.forward(states)                                   # logits: [B, *, V] | values: [B, *]
-        valid_mask = self._inductive_biases(states)
+        valid_mask = self._valid_actions(states)
         probs = self._make_probs(logits, alpha, temperature, valid_mask)
         return probs, values
     
     def sample_with_values(self, states, alpha, temperature, argmax=False):
         # Predict
         logits, values = self.forward(states)                                   # logits: [B, *, V] | values: [B, *]
-        valid_mask = self._inductive_biases(states)
+        valid_mask = self._valid_actions(states)
         probs = self._make_probs(logits, alpha, temperature, valid_mask)
 
         # Unpack probs
@@ -152,6 +166,8 @@ class WordleModel(nn.Module):
         policy_probs_masked = probs["policy_probs_masked"]      # [B, *, V]
         mixed_probs = probs["mixed_probs"]                      # [B, *, V]
         mixed_probs_masked = probs["mixed_probs_masked"]        # [B, *, V]
+        ppo_probs = policy_probs_masked                         # [B, *, V]
+
 
         # Select actions
         if not argmax:
@@ -179,3 +195,29 @@ class WordleModel(nn.Module):
     def sample(self, states, alpha, temperature, argmax=False):
         actions, _ = self.sample_with_values(states, alpha, temperature, argmax=argmax)
         return actions
+
+
+class DotWordleModel(WordleModel):
+    def _build_guess_k(self):
+        raise NotImplementedError
+    
+    @torch.no_grad()
+    def refresh_static_cache(self):
+        was_training = self.training
+        nn.Module.train(self, False)
+        try:
+            self.guess_k_static.copy_(self._build_guess_k())
+        finally:
+            nn.Module.train(self, was_training)
+        return self
+
+    @torch.no_grad()
+    def eval(self):
+        nn.Module.train(self, False)
+        self.guess_k_static.copy_(self._build_guess_k())
+        return self
+
+    def load_state_dict(self, *args, **kwargs):
+        result = super().load_state_dict(*args, **kwargs)
+        self.refresh_static_cache()
+        return result

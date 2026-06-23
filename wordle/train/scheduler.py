@@ -60,6 +60,8 @@ class Scheduler:
         # Set initial LR
         for param_group in self.opt.param_groups:
             param_group["base_lr"] = param_group["lr"]
+        if self.warmup_steps > 0:
+            self._scale_lrs(1.0 / self.warmup_steps)
     
     def _show(self):
         state = self.state_dict()
@@ -81,10 +83,15 @@ class Scheduler:
 
     def step(self):
         self.step_idx += 1
+        # No warmup
+        if self.warmup_steps <= 0:
+            return
         # LR warmup
-        if self.step_idx <= self.warmup_steps:
-            scale = self.step_idx / self.warmup_steps
-            self._scale_lrs(scale)
+        next_step = self.step_idx + 1
+        if next_step <= self.warmup_steps:
+            self._scale_lrs(next_step / self.warmup_steps)
+        else:
+            self._scale_lrs(1.0)
 
     def step_epoch(self, win_rate: float, avg_guesses: float, loss: float, loss_components: dict):
         self.step_idx += 1

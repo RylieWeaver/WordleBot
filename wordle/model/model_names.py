@@ -7,7 +7,8 @@ from .model import (
     ActorCriticNetConfig, ActorCriticNet,
     SeparatedActorCriticNetConfig, SeparatedActorCriticNet,
     DotGuessStateNetConfig, DotGuessStateNet,
-    DotGuessStateNet2Config, DotGuessStateNet2
+    DotGuessStateNet2Config, DotGuessStateNet2,
+    WordleTransformerConfig, WordleTransformer
 )
 
 """
@@ -23,4 +24,5 @@ name2model = {
     "SeparatedActorCriticNet": [SeparatedActorCriticNetConfig, SeparatedActorCriticNet],
     "DotGuessStateNet": [DotGuessStateNetConfig, DotGuessStateNet],
     "DotGuessStateNet2": [DotGuessStateNet2Config, DotGuessStateNet2],
+    "WordleTransformer": [WordleTransformerConfig, WordleTransformer],
 }

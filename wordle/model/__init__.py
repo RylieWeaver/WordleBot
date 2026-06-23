@@ -3,6 +3,7 @@ from .model import (
     ActorCriticNetConfig, ActorCriticNet, 
     SeparatedActorCriticNetConfig, SeparatedActorCriticNet,
     DotGuessStateNetConfig, DotGuessStateNet, 
-    DotGuessStateNet2Config, DotGuessStateNet2
+    DotGuessStateNet2Config, DotGuessStateNet2,
+    WordleTransformerConfig, WordleTransformer
 )
 from .model_names import name2model

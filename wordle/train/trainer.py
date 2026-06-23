@@ -5,6 +5,7 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Optional, Union
 import traceback
+from contextlib import nullcontext
 
 # Torch
 import torch
@@ -33,6 +34,7 @@ class TrainerConfig(Config):
             checkpoint_dir: Optional[Union[Path, str]] = None,
             save_every: Optional[int] = None,
             fp_dtype: str = "float32",
+            amp_dtype: str = "none",
             rest_computer: Optional[float] = 1e-3,
             max_batch_attempts: int = 3,
     ) -> None:
@@ -45,6 +47,7 @@ class TrainerConfig(Config):
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.save_every = save_every
         self.fp_dtype = fp_dtype
+        self.amp_dtype = amp_dtype
         self.rest_computer = rest_computer
         self.max_batch_attempts = max_batch_attempts
 
@@ -76,6 +79,7 @@ class TrainerConfig(Config):
             checkpoint_dir=cfg.get("checkpoint_dir", None),
             save_every=cfg.get("save_every", None),
             fp_dtype=cfg.get("fp_dtype", "float32"),
+            amp_dtype=cfg.get("amp_dtype", "none"),
             rest_computer=cfg.get("rest_computer", 1e-3),
             max_batch_attempts=cfg.get("max_batch_attempts", 3),
         )
@@ -90,6 +94,9 @@ class Trainer:
         self.best_model = best_model.to(device).eval()
         self.device = device
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
+        self.amp_dtype = None if self.cfg.amp_dtype in {None, "none"} else getattr(torch, self.cfg.amp_dtype)
+        self.amp_device_type = torch.device(device).type
+        self.use_amp = (self.amp_dtype is not None) and (self.amp_device_type == "cuda")
 
         # Build objects
         self.simulator = Simulator(self.cfg.simulator_cfg)
@@ -123,6 +130,22 @@ class Trainer:
         self.last_epoch = state_dict["last_epoch"]
         self.best_accuracy = state_dict["best_accuracy"]
         self.best_avg_guesses = state_dict["best_avg_guesses"]
+
+    def _amp_context(self):
+        if not self.use_amp:
+            return nullcontext()
+        return torch.autocast(device_type=self.amp_device_type, dtype=self.amp_dtype)
+
+    def _float32_tree(self, obj):
+        if isinstance(obj, torch.Tensor):
+            return obj.float() if obj.is_floating_point() else obj
+        if isinstance(obj, dict):
+            return {k: self._float32_tree(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._float32_tree(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._float32_tree(v) for v in obj)
+        return obj
 
     def save_checkpoint(self, epoch: int):
         # Setup
@@ -224,20 +247,21 @@ class Trainer:
 
                 # Forward episodes through models
                 episodes = move_to(episodes, self.model.device)
-                probs, responses = self.simulator.process_episodes(self.model, episodes, alpha, temp)
-                with torch.no_grad():
-                    states = move_to(states, self.ref_model.device)
-                    ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                    states = move_to(states, self.best_model.device)
-                    best_probs, _ = self.best_model.predict(states, alpha, temp)
+                with self._amp_context():
+                    probs, responses = self.simulator.process_episodes(self.model, episodes, alpha, temp)
+                    with torch.no_grad():
+                        states = move_to(states, self.ref_model.device)
+                        ref_probs, _ = self.ref_model.predict(states, alpha, temp)
+                        states = move_to(states, self.best_model.device)
+                        best_probs, _ = self.best_model.predict(states, alpha, temp)
                 
                 # Increment loss
                 states = move_to(states, self.device)
                 actions = move_to(actions, self.device)
-                responses = move_to(responses, self.device)
-                probs = move_to(probs, self.device)
-                ref_probs = move_to(ref_probs, self.device)
-                best_probs = move_to(best_probs, self.device)
+                responses = self._float32_tree(move_to(responses, self.device))
+                probs = self._float32_tree(move_to(probs, self.device))
+                ref_probs = self._float32_tree(move_to(ref_probs, self.device))
+                best_probs = self._float32_tree(move_to(best_probs, self.device))
                 batch_loss, batch_loss_components = self.loss.inc_loss(
                     states, actions, responses, probs, ref_probs, best_probs
                 )
@@ -267,20 +291,21 @@ class Trainer:
 
         # Forward episodes through models
         episodes_batch = move_to(episodes_batch, self.model.device)
-        probs, responses = self.simulator.process_episodes(self.model, episodes_batch, alpha, temp)
-        with torch.no_grad():
-            states = move_to(states, self.ref_model.device)
-            ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-            states = move_to(states, self.best_model.device)
-            best_probs, _ = self.best_model.predict(states, alpha, temp)
+        with self._amp_context():
+            probs, responses = self.simulator.process_episodes(self.model, episodes_batch, alpha, temp)
+            with torch.no_grad():
+                states = move_to(states, self.ref_model.device)
+                ref_probs, _ = self.ref_model.predict(states, alpha, temp)
+                states = move_to(states, self.best_model.device)
+                best_probs, _ = self.best_model.predict(states, alpha, temp)
         
         # Measure grad norms
         states = move_to(states, self.device)
         actions = move_to(actions, self.device)
-        responses = move_to(responses, self.device)
-        probs = move_to(probs, self.device)
-        ref_probs = move_to(ref_probs, self.device)
-        best_probs = move_to(best_probs, self.device)
+        responses = self._float32_tree(move_to(responses, self.device))
+        probs = self._float32_tree(move_to(probs, self.device))
+        ref_probs = self._float32_tree(move_to(ref_probs, self.device))
+        best_probs = self._float32_tree(move_to(best_probs, self.device))
         self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, best_probs)
 
     def _loop_without_grad(self, loader, desc, alpha=None, temp=None):
@@ -303,7 +328,9 @@ class Trainer:
 
         for i, episodes_batch in enumerate(tqdm(loader, desc=desc, leave=False)):
             batch_loss, batch_loss_components = self._run_batch(episodes_batch)
-            (batch_loss / self.cfg.batches_per_gradient_step).backward()
+            mb_size = episodes_batch["states"]["active_mask"].shape[0]
+            batch_scale = (mb_size / loader.batch_size) * (1.0 / self.cfg.batches_per_gradient_step)
+            (batch_loss * batch_scale).backward()
             # Step optimizer every N batches or at end of epoch
             if ((i + 1) % self.cfg.batches_per_gradient_step == 0) or (i + 1 == len(loader)):
                 self.opt_handler.clip_grad_norm(self.model)
@@ -332,9 +359,12 @@ class Trainer:
             desc="Collecting Eval Episodes"
         )
         # Evaluate stats
-        test_wins = test_episodes["responses"]["correct"].any(dim=1).float().sum().item()            # [B, G, *] --> [B, *]
-        test_guesses = test_episodes["states"]["active_mask"][:, :-1, ...].float().sum().item()      # [B, G, *] --> scalar
-        test_games = test_episodes["states"]["active_mask"][:, 0, ...].float().sum().item()          # [B, G, *] --> [B, *] --> scalar
+        active_mask = test_episodes["states"]["active_mask"][:, :-1, ...]       # [B, G, *] ignore active mask of final state after last guess
+        test_wins = (
+            test_episodes["responses"]["correct"].bool() & active_mask.bool()
+        ).any(dim=1).float().sum().item()                                       # [B, G, *] --> [B, *]
+        test_guesses = active_mask.float().sum().item()                         # [B, G, *] --> scalar
+        test_games = active_mask[:, 0, ...].float().sum().item()                # [B, G, *] --> [B, *] --> scalar
         test_acc = (test_wins / test_games)
         test_avg_guesses = (test_guesses / test_games)
 
@@ -362,9 +392,12 @@ class Trainer:
             desc="Collecting Rollout Episodes"
         )
         # Evaluate stats
-        rollout_wins = rollout_episodes["responses"]["correct"].any(dim=1).float().sum().item()            # [B, G, *] --> [B, *]
-        rollout_guesses = rollout_episodes["states"]["active_mask"][:, :-1, ...].float().sum().item()      # [B, G, *] --> scalar
-        rollout_games = rollout_episodes["states"]["active_mask"][:, 0, ...].float().sum().item()          # [B, G, *] --> [B, *] --> scalar
+        active_mask = rollout_episodes["states"]["active_mask"][:, :-1, ...]        # [B, G, *] ignore active mask of final state after last guess
+        rollout_wins = (
+            rollout_episodes["responses"]["correct"].bool() & active_mask.bool()
+        ).any(dim=1).float().sum().item()                                           # [B, G, *] --> [B, *]
+        rollout_guesses = active_mask.float().sum().item()                          # [B, G, *] --> scalar
+        rollout_games = active_mask[:, 0, ...].float().sum().item()                 # [B, G, *] --> [B, *] --> scalar
         rollout_acc = (rollout_wins / rollout_games)
         rollout_avg_guesses = (rollout_guesses / rollout_games)
         self.logger.log(
