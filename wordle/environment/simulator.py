@@ -23,6 +23,7 @@ class SimulatorConfig(Config):
             max_guesses: int = 6,
             m: int = 3,
             num_search_actions: int = 10,
+            search_policy_mix: float = 0.2,
             fp_dtype: str = 'float32',
         ):
         self.loader_cfg = loader_cfg if loader_cfg is not None else WordleLoaderConfig()
@@ -33,6 +34,7 @@ class SimulatorConfig(Config):
         self.max_guesses = max_guesses
         self.m = m
         self.num_search_actions = num_search_actions
+        self.search_policy_mix = search_policy_mix
         self.fp_dtype = fp_dtype
 
 
@@ -51,6 +53,7 @@ class Simulator:
         self.max_guesses = self.cfg.max_guesses
         self.m = self.cfg.m
         self.num_search_actions = self.cfg.num_search_actions
+        self.search_policy_mix = self.cfg.search_policy_mix
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
         self.eps = 1e-8
 
@@ -387,10 +390,13 @@ class Simulator:
         k model actions are sampled from the alpha/temperature-adjusted policy,
         then scored against m uniformly sampled feasible hidden targets. Every
         action after the proposed first action is chosen by a fully deterministic
-        argmax policy. Only the probability mass already assigned to the sampled
-        actions is redistributed according to rollout score; all non-selected
-        action probabilities are left unchanged. For states with <=2 feasible
-        targets, the normalized target mask is used directly as the target.
+        argmax policy. Rollout scores are standardized before softmaxing. Only
+        the probability mass already assigned to the sampled actions is
+        redistributed according to rollout score; all non-selected action
+        probabilities are left unchanged. The search-refined distribution is
+        then mixed into the prior policy with ``search_policy_mix``. For states
+        with <=2 feasible targets, the normalized target mask is used directly
+        as the target.
         """
         base_actions = model.sample(states, alpha, temperature, argmax=False)
         probs = base_actions["policy_probs_masked"]
@@ -402,15 +408,24 @@ class Simulator:
         hidden_idx = self._sample_targets(states["target_mask"])
         scores = self._rollout_scores(model, data, states, base_actions, topk_idx, hidden_idx)
 
-        refined = probs.clone()
+        score_mean = scores.mean(dim=-1, keepdim=True)
+        score_std = scores.std(dim=-1, keepdim=True, unbiased=False).clamp_min(self.eps)
+        normalized_scores = (scores - score_mean) / score_std
+
+        search_probs = probs.clone()
         selected_mass = probs.gather(-1, topk_idx).sum(dim=-1, keepdim=True)
-        topk_probs = F.softmax(scores, dim=-1) * selected_mass
-        refined.scatter_(-1, topk_idx, topk_probs)
+        topk_probs = F.softmax(normalized_scores, dim=-1) * selected_mass
+        search_probs.scatter_(-1, topk_idx, topk_probs)
+
+        mixed_search_probs = (
+            self.search_policy_mix * search_probs +
+            (1 - self.search_policy_mix) * probs
+        )
 
         target_probs = torch.where(
             small_mask.unsqueeze(-1),
             states["total_target_mask"].float() / states["total_target_mask"].float().sum(dim=-1, keepdim=True).clamp_min(self.eps),
-            refined,
+            mixed_search_probs,
         )
         target_probs = target_probs / target_probs.sum(dim=-1, keepdim=True).clamp_min(self.eps)
 

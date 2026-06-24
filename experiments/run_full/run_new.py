@@ -80,6 +80,7 @@ if __name__ == '__main__':
             max_guesses=6,
             m=32,
             num_search_actions=10,
+            search_policy_mix=0.2,
         )
         loss_cfg = WordleLossConfig(
             loss_weights={
