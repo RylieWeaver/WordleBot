@@ -252,8 +252,6 @@ class Trainer:
                     with torch.no_grad():
                         states = move_to(states, self.ref_model.device)
                         ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                        states = move_to(states, self.best_model.device)
-                        best_probs, _ = self.best_model.predict(states, alpha, temp)
                 
                 # Increment loss
                 states = move_to(states, self.device)
@@ -261,14 +259,13 @@ class Trainer:
                 responses = self._float32_tree(move_to(responses, self.device))
                 probs = self._float32_tree(move_to(probs, self.device))
                 ref_probs = self._float32_tree(move_to(ref_probs, self.device))
-                best_probs = self._float32_tree(move_to(best_probs, self.device))
                 batch_loss, batch_loss_components = self.loss.inc_loss(
-                    states, actions, responses, probs, ref_probs, best_probs
+                    states, actions, responses, probs, ref_probs
                 )
 
                 # Measure grad norms
                 if measure_grad_norms:
-                    self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, best_probs, alpha, temp)
+                    self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, alpha, temp)
                 return batch_loss, batch_loss_components
             except RuntimeError as e:
                 if attempt < self.cfg.max_batch_attempts:
@@ -296,8 +293,6 @@ class Trainer:
             with torch.no_grad():
                 states = move_to(states, self.ref_model.device)
                 ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                states = move_to(states, self.best_model.device)
-                best_probs, _ = self.best_model.predict(states, alpha, temp)
         
         # Measure grad norms
         states = move_to(states, self.device)
@@ -305,8 +300,7 @@ class Trainer:
         responses = self._float32_tree(move_to(responses, self.device))
         probs = self._float32_tree(move_to(probs, self.device))
         ref_probs = self._float32_tree(move_to(ref_probs, self.device))
-        best_probs = self._float32_tree(move_to(best_probs, self.device))
-        self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, best_probs)
+        self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs)
 
     def _loop_without_grad(self, loader, desc, alpha=None, temp=None):
         self.loss.init_cumulative_loss()
@@ -376,7 +370,7 @@ class Trainer:
             f"[Epoch {epoch}][Eval] Accuracy: {test_acc:.4f} | Avg Guesses: {test_avg_guesses:.4f} | "
             f"Actor Loss: {test_loss_components['actor']:.6f} | Critic Loss: {test_loss_components['critic']:.6f} | "
             f"Entropy Loss: {test_loss_components['entropy']:.6f} | KL Reg Loss: {test_loss_components['kl_reg']:.6f} | "
-            f"KL Guide Loss: {test_loss_components['kl_guide']:.6f} | KL Best Loss: {test_loss_components['kl_best']:.6f} "
+            f"KL Guide Loss: {test_loss_components['kl_guide']:.6f} "
         )
         # Explicitly cleanup eval objects (prevents OOM and semaphore leaks)
         del test_loader; del test_dataset; del test_episodes; gc.collect()
@@ -416,8 +410,7 @@ class Trainer:
             self.logger.log(
                 f"[Epoch {epoch}][{desc}] Loss: {rollout_loss:.6f} | Actor Loss: {rollout_loss_components['actor']:.6f} | "
                 f"Critic Loss: {rollout_loss_components['critic']:.6f} | Entropy Loss: {rollout_loss_components['entropy']:.6f} | "
-                f"KL Reg Loss: {rollout_loss_components['kl_reg']:.6f} | KL Guide Loss: {rollout_loss_components['kl_guide']:.6f} | "
-                f"KL Best Loss: {rollout_loss_components['kl_best']:.6f}"
+                f"KL Reg Loss: {rollout_loss_components['kl_reg']:.6f} | KL Guide Loss: {rollout_loss_components['kl_guide']:.6f}"
             )
         # Explicitly cleanup the rollout objects (prevents OOM and semaphore leaks)
         del processing_loader; del rollout_dataset; del rollout_episodes; gc.collect()

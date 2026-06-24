@@ -2,7 +2,6 @@
 import math
 from tqdm import tqdm
 from typing import Union
-import warnings
 
 
 # Torch
@@ -25,6 +24,8 @@ class SimulatorConfig(Config):
             gamma: float = 0.20,
             lam: float = 0.95,
             m: int = 3,
+            num_search_actions: int = 10,
+            target_temperature: float = 1.0,
             reward_blend_factor: float = 1.0,
             value_blend_factor: float = 1.0,
             advantage_type: str = "reward-telescoped-value-baseline",
@@ -41,35 +42,13 @@ class SimulatorConfig(Config):
         self.gamma = gamma
         self.lam = lam
         self.m = m
+        self.num_search_actions = num_search_actions
+        self.target_temperature = target_temperature
         self.reward_blend_factor = reward_blend_factor
         self.value_blend_factor = value_blend_factor
-        self.advantage_type = self._as_advantage_type(advantage_type)
-        self.adv_mean_reduce_dims = self._as_reduce_dims(adv_mean_reduce_dims)
-        self.adv_std_reduce_dims = self._as_reduce_dims(adv_std_reduce_dims)
+        # Deprecated advantage-normalization options are still accepted for
+        # backward-compatible config loading, but are intentionally unused.
         self.fp_dtype = fp_dtype
-
-    def _as_advantage_type(self, advantage_type):
-        aliases = {
-            "reward-telecoped": "reward-telescoped",
-            "reward-telecoped-value-baseline": "reward-telescoped-value-baseline",
-        }
-        advantage_type = aliases.get(advantage_type, advantage_type)
-        valid = {
-            "gae",
-            "reward-total",
-            "reward-telescoped",
-            "reward-telescoped-value-baseline",
-        }
-        if advantage_type not in valid:
-            raise ValueError(f"Unknown advantage_type: {advantage_type}. Valid options are {sorted(valid)}")
-        return advantage_type
-
-    def _as_reduce_dims(self, reduce_dims):
-        if reduce_dims is None:
-            return None
-        if isinstance(reduce_dims, int):
-            return (reduce_dims,)
-        return tuple(reduce_dims)
 
 
 class Simulator:
@@ -88,11 +67,10 @@ class Simulator:
         self.gamma = self.cfg.gamma
         self.lam = self.cfg.lam
         self.m = self.cfg.m
+        self.num_search_actions = self.cfg.num_search_actions
+        self.target_temperature = self.cfg.target_temperature
         self.reward_blend_factor = self.cfg.reward_blend_factor
         self.value_blend_factor = self.cfg.value_blend_factor
-        self.advantage_type = self.cfg.advantage_type
-        self.adv_mean_reduce_dims = self.cfg.adv_mean_reduce_dims
-        self.adv_std_reduce_dims = self.cfg.adv_std_reduce_dims
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
         self.eps = 1e-8
 
@@ -419,117 +397,102 @@ class Simulator:
 
         return states, responses
     
-    def _masked_mean(self, x, mask, reduce_dims):
-        if reduce_dims is None:
-            return torch.zeros((), dtype=x.dtype, device=x.device), None
-        count = mask.sum(dim=reduce_dims, keepdim=True)
-        mean = (x * mask).sum(dim=reduce_dims, keepdim=True) / count.clamp_min(1.0)
-        mean = torch.where(count > 0, mean, torch.zeros_like(mean))
-        return mean, count
-    
-    def _masked_std(self, x, mask, reduce_dims):
-        if reduce_dims is None:
-            return torch.ones((), dtype=x.dtype, device=x.device), None
-        mean, count = self._masked_mean(x, mask, reduce_dims)
-        ss_res = (((x - mean) * mask) ** 2).sum(dim=reduce_dims, keepdim=True)
-        std = torch.sqrt(ss_res / count.clamp_min(1.0)).clamp_min(self.eps)
-        std = torch.where(count > 0, std, torch.ones_like(std))
-        return std, count
-    
-    def norm_advantages(self, advantages, active_mask):                              # [B, G, R] (both)
-        adv_mean, mean_count = self._masked_mean(                                    # [*, *, *]
-            advantages, active_mask, self.adv_mean_reduce_dims
+    def _clone_states(self, states):
+        return {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in states.items()}
+
+    def _actions_from_guess_idx(self, base_actions, guess_idx):
+        V = base_actions["policy_probs"].shape[-1]
+        actions = {}
+        for key, value in base_actions.items():
+            if key in {"guess_idx", "guess_mask"}:
+                continue
+            if isinstance(value, torch.Tensor):
+                extra_dims = guess_idx.dim() - (value.dim() - 1)
+                actions[key] = value
+                for _ in range(extra_dims):
+                    actions[key] = actions[key].unsqueeze(-2)
+                actions[key] = actions[key].expand(*guess_idx.shape, V).clone()
+        actions["guess_idx"] = guess_idx
+        actions["guess_mask"] = F.one_hot(guess_idx, num_classes=V).bool()
+        return actions
+
+    def _rollout_scores(self, model, data, states, base_actions, topk_idx, hidden_idx):
+        """
+        Score each proposed first action by averaging full-rollout reward over
+        uniformly sampled feasible hidden targets. Shapes are [B, K, M].
+        """
+        *base_shape, K = topk_idx.shape
+        M = hidden_idx.shape[-1]
+        device = states["t"].device
+        rollout_states = {
+            "t": expand_var(expand_var(states["t"], -1, K), -1, M),
+            "last_guess": expand_var(expand_var(states["last_guess"], -1, K), -1, M),
+            "alphabet": expand_var(expand_var(states["alphabet"], -3, K), -3, M),
+            "active_mask": expand_var(expand_var(states["active_mask"], -1, K), -1, M),
+            "guessed_mask": expand_var(expand_var(states["guessed_mask"], -2, K), -2, M),
+            "target_mask": expand_var(expand_var(states["target_mask"], -2, K), -2, M),
+            "total_target_mask": expand_var(expand_var(states["total_target_mask"], -2, K), -2, M),
+            "entropy": expand_var(expand_var(states["entropy"], -1, K), -1, M),
+            "idx": expand_var(hidden_idx, -2, K),
+        }
+        rollout_data = self.loader._idx2data(rollout_states["idx"])
+        rollout_data = move_to(rollout_data, data["total"]["tensor"].device)
+        first_guess_idx = topk_idx.unsqueeze(-1).expand(*base_shape, K, M)
+        rollout_actions = self._actions_from_guess_idx(base_actions, first_guess_idx)
+
+        scores = torch.zeros((*base_shape, K, M), dtype=self.fp_dtype, device=device)
+        rollout_states, responses = self.step(model, rollout_data, rollout_states, rollout_actions)
+        scores = scores + responses["rewards"]
+
+        for _ in range(self.max_guesses - 1):
+            if not rollout_states["active_mask"].any():
+                break
+            rollout_actions = model.sample(rollout_states, alpha=0.0, temperature=1.0, argmax=True)
+            rollout_states, responses = self.step(model, rollout_data, rollout_states, rollout_actions)
+            scores = scores + responses["rewards"]
+        return scores.mean(dim=-1)
+
+    def search_actions(self, model, data, states, alpha, temperature, argmax=False):
+        """
+        Refine the model policy with policy-guided complete rollouts.
+
+        The top-k model actions are scored against m uniformly sampled feasible
+        hidden targets. Only the probability mass already assigned to those top-k
+        actions is redistributed according to rollout score; all non-selected
+        action probabilities are left unchanged. For states with <=2 feasible
+        targets, the normalized target mask is used directly as the target.
+        """
+        base_actions = model.sample(states, alpha, temperature, argmax=False)
+        probs = base_actions["policy_probs_masked"]
+        target_count = states["target_mask"].sum(dim=-1)
+        small_mask = target_count <= 2
+
+        k = min(self.num_search_actions, probs.shape[-1])
+        _, topk_idx = torch.topk(probs, k=k, dim=-1)
+        hidden_idx = self._sample_targets(states["target_mask"])
+        scores = self._rollout_scores(model, data, states, base_actions, topk_idx, hidden_idx)
+
+        refined = probs.clone()
+        selected_mass = probs.gather(-1, topk_idx).sum(dim=-1, keepdim=True)
+        topk_probs = F.softmax(scores / max(self.target_temperature, self.eps), dim=-1) * selected_mass
+        refined.scatter_(-1, topk_idx, topk_probs)
+
+        target_probs = torch.where(
+            small_mask.unsqueeze(-1),
+            states["total_target_mask"].float() / states["total_target_mask"].float().sum(dim=-1, keepdim=True).clamp_min(self.eps),
+            refined,
         )
-        adv_std, std_count = self._masked_std(                                       # [*, *, *]
-            advantages, active_mask, self.adv_std_reduce_dims
-        )
+        target_probs = target_probs / target_probs.sum(dim=-1, keepdim=True).clamp_min(self.eps)
 
-        # Default normalization to 0/1 when there aren't enough active games
-        # NOTE: Skip zero active because then there's just no episode
-        min_adv_count = 2
-        if mean_count is not None:
-            mean_leq_min = (mean_count > 0) & (mean_count < min_adv_count)
-            if mean_leq_min.any():
-                warnings.warn(
-                    f"Mean advantage count is < {min_adv_count} for \
-                    {mean_leq_min.sum().item()} groups. Defaulting to 0 mean advantage."
-                )
-                adv_mean = torch.where(mean_leq_min, torch.zeros_like(adv_mean), adv_mean).detach()
-        if std_count is not None:
-            std_leq_min = (std_count > 0) & (std_count < min_adv_count)
-            if std_leq_min.any():
-                warnings.warn(
-                    f"Std advantage count is < {min_adv_count} for \
-                    {std_leq_min.sum().item()} groups. Defaulting to 1 std advantage."
-                )
-                adv_std = torch.where(std_leq_min, torch.ones_like(adv_std), adv_std).detach()
-
-        # Apply normalization
-        norm_advantages = ((advantages - adv_mean) / adv_std) * active_mask           # [B, G, R]
-        return norm_advantages, adv_mean, adv_std
-    
-    def calculate_advantages(self, responses, active_mask):
-        # Read
-        rewards = responses["rewards"]                      # [B, G, *]
-        values = responses["values"]                        # [B, G+1, *]
-        expected_rewards = responses["expected_rewards"]    # [B, G, *]
-        expected_values = responses["expected_values"]      # [B, G, *]
-        active = active_mask[:, :-1, ...].float()           # [B, G, *]
-        next_active = active_mask[:, 1:, ...].float()       # [B, G, *]
-        
-        # Setup
-        B, _, *dims = active_mask.shape
-        G = self.max_guesses
-        device = rewards.device
-
-        # Blend and mask the tensors
-        # NOTE: Important for advantages to not be influenced by values/rewards after an episode finishes!
-        blended_rewards = (                                                             # [B, G, *]
-            self.reward_blend_factor * expected_rewards +
-            (1 - self.reward_blend_factor) * rewards
-        ) * active
-        blended_next_values = (                                                         # [B, G, *]
-            self.value_blend_factor * expected_values +
-            (1 - self.value_blend_factor) * values[:, 1:, ...]
-        ).detach() * next_active
-        current_values = (values[:, :-1, ...] * active).detach()                        # [B, G, *]
-
-        # Compute returns and advantages
-        if self.advantage_type == "gae":
-            advantages = torch.zeros((B, G, *dims), dtype=self.fp_dtype, device=device)
-            gae = torch.zeros((B, *dims), dtype=self.fp_dtype, device=device)
-            for t in reversed(range(G)):
-                delta = (
-                    blended_rewards[:, t, ...] +
-                    self.gamma * blended_next_values[:, t, ...] -
-                    current_values[:, t, ...]
-                )
-                gae = delta + self.gamma * self.lam * next_active[:, t, ...] * gae
-                advantages[:, t, ...] = gae
-            advantages = advantages * active
-            returns = (advantages + current_values) * active
-        elif self.advantage_type == "reward-total":
-            returns = blended_rewards.sum(dim=1, keepdim=True).expand(B, G, *dims) * active
-            advantages = returns
-        elif self.advantage_type in {"reward-telescoped", "reward-telescoped-value-baseline"}:
-            returns = torch.zeros((B, G, *dims), dtype=self.fp_dtype, device=device)
-            running_return = torch.zeros((B, *dims), dtype=self.fp_dtype, device=device)
-            for t in reversed(range(G)):
-                running_return = blended_rewards[:, t, ...] + self.gamma * running_return
-                returns[:, t, ...] = running_return
-            returns = returns * active
-            if self.advantage_type == "reward-telescoped-value-baseline":
-                advantages = (returns - current_values) * active
-            else:
-                advantages = returns
+        if argmax:
+            guess_idx = target_probs.argmax(dim=-1)
         else:
-            raise ValueError(f"Unknown advantage_type: {self.advantage_type}")
-
-        norm_advantages, adv_mean, adv_std = self.norm_advantages(advantages, active)
-        responses["returns"] = returns.detach()                                             # [B, G, *]
-        responses["advantages"] = advantages.detach()                                       # [B, G, *]
-        responses["norm_advantages"] = norm_advantages                                      # [B, G, *]
-        return responses
+            *dims, V = target_probs.shape
+            guess_idx = torch.multinomial(target_probs.reshape(-1, V), 1).squeeze(-1).reshape(*dims)
+        base_actions["guess_idx"] = guess_idx
+        base_actions["guess_mask"] = F.one_hot(guess_idx, num_classes=target_probs.shape[-1]).bool()
+        base_actions["search_target_probs"] = target_probs
+        return base_actions
     
     def collect_episodes_mb(self, model, data, alpha, temperature, argmax=False):
         """We keep the entire episodes on CPU, then states, actions, responses on Model device"""
@@ -554,8 +517,8 @@ class Simulator:
             #       the episodes after collecting.
             # while (states["t"] <= G).all() and states["active_mask"].any():
             for t in range(1, G+1):
-                # Select actions = f(states)
-                actions = model.sample(states, alpha, temperature, argmax=argmax)
+                # Select actions using inference-time search refinement.
+                actions = self.search_actions(model, data, states, alpha, temperature, argmax=argmax)
 
                 # Simulate responses = f(states, actions)
                 states, responses = self.step(model, data, states, actions)
@@ -589,10 +552,6 @@ class Simulator:
         episodes["actions"] = self._cat_dict(episodes["actions"], dim=0)
         episodes["responses"] = self._cat_dict(episodes["responses"], dim=0)    
 
-        # Calculate advantages
-        episodes["responses"] = self.calculate_advantages(
-            episodes["responses"], episodes["states"]["active_mask"]
-        )    
         return episodes
 
     def process_episodes(

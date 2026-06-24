@@ -81,22 +81,18 @@ if __name__ == '__main__':
         )
         simulator_cfg = SimulatorConfig(
             loader_cfg=loader_cfg,
-            gamma=1.0,
-            lam=1.0,
             max_guesses=6,
-            m=3,
-            advantage_type="gae",
-            adv_mean_reduce_dims=(2,),
-            adv_std_reduce_dims=(0, 2),
+            m=32,
+            num_search_actions=10,
+            target_temperature=1.0,
         )
         loss_cfg = WordleLossConfig(
             loss_weights={
-                "actor": 5.0,
-                "critic": 5.0,
+                "actor": 1.0,
+                "critic": 0.0,
                 "entropy": 0.0,
-                "kl_reg": 1.00,
-                "kl_guide": 0.00,
-                "kl_best": 0.10,
+                "kl_reg": 0.0,
+                "kl_guide": 0.0,
             },
             ratio_prob_clip=0.2,
         )
