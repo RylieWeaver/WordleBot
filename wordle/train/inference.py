@@ -139,10 +139,9 @@ def inference(model, target_idx):
     )
     simulator_cfg = SimulatorConfig(
         loader_cfg=loader_cfg,
-        gamma=0.2,
-        lam=0.95,
         max_guesses=6,
         m=1,
+        num_search_actions=10,
     )
     simulator = Simulator(simulator_cfg)
 

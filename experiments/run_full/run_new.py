@@ -53,8 +53,6 @@ if __name__ == '__main__':
         )
         total_vocab_tensor = words_to_tensor(total_vocab).to(device)                # [V, 5]
         model = DotGuessStateNet(model_cfg, total_vocab_tensor=total_vocab_tensor, device=device).to(device)
-        ref_model = DotGuessStateNet(model_cfg, total_vocab_tensor=total_vocab_tensor, device=device).to(device).eval()
-        best_model = DotGuessStateNet(model_cfg, total_vocab_tensor=total_vocab_tensor, device=device).to(device).eval()
         # model_cfg = ActorCriticNetConfig(
         #     # state_input_dim = 292 = 26 letters * 11 letter possibilities (1 count, 5 green, 5 grey) + 6 (one-hot of guess number)
         #     hidden_dim=128 * c,
@@ -65,10 +63,6 @@ if __name__ == '__main__':
         # )
         # model = ActorCriticNet(model_cfg, device=device).to(device)
         # # model.load_state_dict(torch.load(f'{load_dir}/model.pth', map_location=device, weights_only=True))
-        # ref_model = ActorCriticNet(model_cfg, device=device).to(device).eval()
-        # best_model = ActorCriticNet(model_cfg, device=device).to(device).eval()
-        ref_model.load_state_dict(model.state_dict())
-        best_model.load_state_dict(model.state_dict())
 
         # Configs fed into trainer
         loader_cfg = WordleLoaderConfig(
@@ -85,16 +79,7 @@ if __name__ == '__main__':
             m=32,
             num_search_actions=10,
         )
-        loss_cfg = WordleLossConfig(
-            loss_weights={
-                "actor": 1.0,
-                "critic": 0.0,
-                "entropy": 0.0,
-                "kl_reg": 0.0,
-                "kl_guide": 0.0,
-            },
-            ratio_prob_clip=0.2,
-        )
+        loss_cfg = WordleLossConfig(loss_weight=1.0)
         opt_handler_cfg = OptHandlerConfig(
             name="adamw",
             lr=3e-4,
@@ -128,7 +113,7 @@ if __name__ == '__main__':
             amp_dtype="bfloat16",
             rest_computer=0.0,
         )
-        trainer = Trainer(trainer_cfg, ref_model, model, best_model, device=device)
+        trainer = Trainer(trainer_cfg, model, device=device)
     # Trainer from checkpoint
     else:
         ckpt_dir = Path(f"checkpoints/test/{args.resume_from}")

@@ -21,15 +21,8 @@ class SimulatorConfig(Config):
             correct_reward: float = 0.1,
             correct_blend_factor: float = 1.0,
             max_guesses: int = 6,
-            gamma: float = 0.20,
-            lam: float = 0.95,
             m: int = 3,
             num_search_actions: int = 10,
-            reward_blend_factor: float = 1.0,
-            value_blend_factor: float = 1.0,
-            advantage_type: str = "reward-telescoped-value-baseline",
-            adv_mean_reduce_dims: Union[tuple, list, int, None] = (2,),
-            adv_std_reduce_dims: Union[tuple, list, int, None] = (0, 2),
             fp_dtype: str = 'float32',
         ):
         self.loader_cfg = loader_cfg if loader_cfg is not None else WordleLoaderConfig()
@@ -38,14 +31,8 @@ class SimulatorConfig(Config):
         self.correct_reward = correct_reward
         self.correct_blend_factor = correct_blend_factor
         self.max_guesses = max_guesses
-        self.gamma = gamma
-        self.lam = lam
         self.m = m
         self.num_search_actions = num_search_actions
-        self.reward_blend_factor = reward_blend_factor
-        self.value_blend_factor = value_blend_factor
-        # Deprecated advantage-normalization options are still accepted for
-        # backward-compatible config loading, but are intentionally unused.
         self.fp_dtype = fp_dtype
 
 
@@ -62,12 +49,8 @@ class Simulator:
         self.correct_reward = self.cfg.correct_reward
         self.correct_blend_factor = self.cfg.correct_blend_factor
         self.max_guesses = self.cfg.max_guesses
-        self.gamma = self.cfg.gamma
-        self.lam = self.cfg.lam
         self.m = self.cfg.m
         self.num_search_actions = self.cfg.num_search_actions
-        self.reward_blend_factor = self.cfg.reward_blend_factor
-        self.value_blend_factor = self.cfg.value_blend_factor
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
         self.eps = 1e-8
 
