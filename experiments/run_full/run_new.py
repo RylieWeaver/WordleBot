@@ -70,15 +70,15 @@ if __name__ == '__main__':
         loader_cfg = WordleLoaderConfig(
             target_vocab=target_vocab,
             nontarget_vocab=nontarget_vocab,
-            batch_size=32,
-            repeats=32,
+            batch_size=256,
+            repeats=4,
             shuffle=True,
             num_workers=4,
         )
         simulator_cfg = SimulatorConfig(
             loader_cfg=loader_cfg,
             max_guesses=6,
-            m=32,
+            m=8,
             num_search_actions=10,
             search_policy_mix=0.2,
         )
@@ -110,8 +110,8 @@ if __name__ == '__main__':
         )
         # Trainer
         trainer_cfg = TrainerConfig(
-            processing_batch_size=5,
-            batches_per_gradient_step=463,
+            processing_batch_size=32,
+            batches_per_gradient_step=4,
             rollout_size=6,
             simulator_cfg=simulator_cfg,
             loss_cfg=loss_cfg,
