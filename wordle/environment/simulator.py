@@ -254,74 +254,19 @@ class Simulator:
         idx[~enough] = torch.multinomial(mask_f[~enough], m, replacement=True)
         return idx
     
-    def _target_expansion(self, states, actions, m):
+    def step(self, model, data, states, actions, calculate_reward=True):
         """
-        Expand the states to have an additional dimension of size m for candidate target words.
-        """
-        idx = self._sample_targets(states["target_mask"])                                           # [B, m]
-        cand_data = self.loader._idx2data(idx)                                                      # dict with [B, m] batch idx for target and total
-        cand_states = {
-            "t": expand_var(states["t"], dim=-1, size=m),                                           # [B, *, m]
-            "alphabet": expand_var(states["alphabet"], dim=-3, size=m),                             # [B, *, m, 26, 11]
-            "active_mask": expand_var(states["active_mask"], dim=-1, size=m),                       # [B, *, m]
-            "guessed_mask": expand_var(states["guessed_mask"], dim=-2, size=m),                     # [B, *, m, V]
-            "target_mask": expand_var(states["target_mask"], dim=-2, size=m),                       # [B, *, m, T]
-            "total_target_mask": expand_var(states["total_target_mask"], dim=-2, size=m),           # [B, *, m, V]
-            "entropy": expand_var(states["entropy"], dim=-1, size=m),                               # [B, *, m]
-            "idx": idx,                                                                             # [B, *, m]
-        }
-        cand_actions = {
-            "policy_probs": expand_var(actions["policy_probs"], dim=-2, size=m),                    # [B, *, m, V]
-            "policy_probs_masked": expand_var(actions["policy_probs_masked"], dim=-2, size=m),      # [B, *, m, V]
-            "mixed_probs": expand_var(actions["mixed_probs"], dim=-2, size=m),                      # [B, *, m, V]
-            "mixed_probs_masked": expand_var(actions["mixed_probs_masked"], dim=-2, size=m),        # [B, *, m, V]
-            "guess_idx": expand_var(actions["guess_idx"], dim=-1, size=m),                          # [B, *, m]
-            "guess_mask": expand_var(actions["guess_mask"], dim=-2, size=m),                        # [B, *, m, V]
-            "valid_mask": expand_var(actions["valid_mask"], dim=-2, size=m),                        # [B, *, m, V]
-        }
-        return cand_data, cand_states, cand_actions
+        Simulate one Wordle step for the actual hidden target in ``data``.
 
-    def step(self, model, data, states, actions):
-        """
-        Simulate one Wordle step
-
-        Data:
-        - target:
-            - states: [T, 26, 11]
-            - tensor: [T, 5]
-        - total:
-            - states: [V, 26, 11]
-            - tensor: [V, 5]
-        
-        States:
-        - t: [B, *] (int)
-        - last_guess: [B, *] (bool)
-        - alphabet: [B, *, 26, 11]
-        - active_mask: [B, *]
-        - guessed_mask: [B, *, V]
-        - target_mask: [B, *, T]
-        - total_target_mask: [B, *, V]
-        - entropy: [B, *]
-
-        Returns:
-        - updated states
-        - responses:
-            - values: [B, *]
-            - rewards: [B, *]
-            - expected_values: [B, *]
-            - expected_rewards: [B, *]
-            - correct: [B, *]
+        This intentionally does not expand over sampled target candidates. Search
+        rollouts already expand states over [top-k actions, sampled hidden targets],
+        so doing another m-way expansion here would multiply memory by m again.
         """
         # Setup
         T = data["target"]["size"]
         V = data["total"]["size"]
 
-        # Simulate possible target words given the target mask
-        cand_data, cand_states, cand_actions = self._target_expansion(states, actions, self.m)
-        cand_data = move_to(cand_data, data["total"]["tensor"].device)
-        cand_states = move_to(cand_states, states["alphabet"].device)
-
-        # Update what we can in states before simulating response 
+        # Update what we can in states before simulating response
         # (t, alphabet, guessed_mask, active_mask)
         states["t"] = states["t"] + 1
         states["alphabet"] = self._update_alphabet(data, states, actions)           # [B, *, 26, 11]
@@ -329,26 +274,16 @@ class Simulator:
         states["guessed_mask"] = states["guessed_mask"] | F.one_hot(                # [B, *, V]
             actions["guess_idx"], num_classes=V
         ).bool()
-        cand_states["t"] = cand_states["t"] + 1
-        cand_states["alphabet"] = self._update_alphabet(                            # [B, *, m, 26, 11]
-            cand_data, cand_states, cand_actions
-        )
-        states["last_guess"] = (states["t"] == self.max_guesses)                    # [B, *]
-        cand_states["guessed_mask"] = cand_states["guessed_mask"] | F.one_hot(      # [B, *, m, V]
-            cand_actions["guess_idx"], num_classes=V
-        ).bool()
 
-        # Calculate responses
-        # NOTE: The model only requires updated t/alphabet for value estimates
-        with torch.no_grad():
-            _, values = model(states)                                               # [B, *]
-            _, cand_values = model(cand_states)                                     # [B, *, m]
+        # Calculate transition. Rewards are only needed for search rollouts; episode
+        # collection only needs the updated target mask and correctness for state
+        # progression/statistics.
         rewards, new_entropy, new_target_mask, correct = (                          # [B, *], [B, *], [B, *, T]
             self._calculate_rewards(data, states, actions)
         )
-        cand_rewards, _, _, _ = (                                                   # [B, *, m]
-            self._calculate_rewards(cand_data, cand_states, cand_actions)
-        )
+        if not calculate_reward:
+            rewards = torch.zeros_like(rewards)
+
         # NOTE: Right-padding requires the convention of targets first in the total vocab
         new_total_target_mask = F.pad(new_target_mask, (0, V - T)).bool()           # [B, *, V]
 
@@ -368,30 +303,21 @@ class Simulator:
 
         # Collect responses
         responses = {
-            "values": values,                                                       # [B, *]
             "rewards": rewards,                                                     # [B, *]
-            "expected_values": cand_values.mean(dim=-1),                            # [B, *]
-            "expected_rewards": cand_rewards.mean(dim=-1),                          # [B, *]
             "correct": correct                                                      # [B, *]
         }
 
         return states, responses
     
     def _actions_from_guess_idx(self, base_actions, guess_idx):
+        # Rollout steps only need the selected word indices. Avoid expanding full
+        # probability tensors to [batch, repeats, top-k, m, vocab], which is the
+        # main avoidable OOM risk in search target construction.
         V = base_actions["policy_probs"].shape[-1]
-        actions = {}
-        for key, value in base_actions.items():
-            if key in {"guess_idx", "guess_mask"}:
-                continue
-            if isinstance(value, torch.Tensor):
-                extra_dims = guess_idx.dim() - (value.dim() - 1)
-                actions[key] = value
-                for _ in range(extra_dims):
-                    actions[key] = actions[key].unsqueeze(-2)
-                actions[key] = actions[key].expand(*guess_idx.shape, V).clone()
-        actions["guess_idx"] = guess_idx
-        actions["guess_mask"] = F.one_hot(guess_idx, num_classes=V).bool()
-        return actions
+        return {
+            "guess_idx": guess_idx,
+            "guess_mask": F.one_hot(guess_idx, num_classes=V).bool(),
+        }
 
     def _rollout_scores(self, model, data, states, base_actions, topk_idx, hidden_idx):
         """
@@ -507,7 +433,7 @@ class Simulator:
                 actions = model.sample(states, alpha, temperature, argmax=argmax)
 
                 # Simulate responses = f(states, actions)
-                states, responses = self.step(model, data, states, actions)
+                states, responses = self.step(model, data, states, actions, calculate_reward=False)
 
                 # Store
                 self._append_dict(episodes["states"], move_to(states, "cpu"))
