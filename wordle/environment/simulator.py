@@ -319,6 +319,25 @@ class Simulator:
             "guess_mask": F.one_hot(guess_idx, num_classes=V).bool(),
         }
 
+    def _sample_action_indices(self, probs, k):
+        """
+        Sample k proposed rollout actions from the policy distribution.
+
+        This is intentionally probabilistic rather than deterministic top-k:
+        high-probability actions are more likely to be searched, but lower-ranked
+        actions can still enter the rollout set.
+        """
+        *base_shape, V = probs.shape
+        flat_probs = probs.reshape(-1, V)
+        flat_idx = []
+        for row in flat_probs:
+            # Last-guess / <=2-candidate masks can leave fewer than k non-zero
+            # entries. Use replacement only for those degenerate rows; they are
+            # later overwritten by the normalized target-mask target anyway.
+            replacement = (row > 0).sum().item() < k
+            flat_idx.append(torch.multinomial(row, k, replacement=replacement))
+        return torch.stack(flat_idx, dim=0).reshape(*base_shape, k)
+
     def _rollout_scores(self, model, data, states, base_actions, topk_idx, hidden_idx):
         """
         Score each proposed first action by averaging full-rollout reward over
@@ -365,10 +384,10 @@ class Simulator:
         """
         Refine the model policy with policy-guided complete rollouts.
 
-        The top-k model actions are selected from the alpha/temperature-adjusted
-        policy, then scored against m uniformly sampled feasible hidden targets.
-        Every action after the proposed first action is chosen by a fully
-        deterministic argmax policy. Only the probability mass already assigned to those top-k
+        k model actions are sampled from the alpha/temperature-adjusted policy,
+        then scored against m uniformly sampled feasible hidden targets. Every
+        action after the proposed first action is chosen by a fully deterministic
+        argmax policy. Only the probability mass already assigned to the sampled
         actions is redistributed according to rollout score; all non-selected
         action probabilities are left unchanged. For states with <=2 feasible
         targets, the normalized target mask is used directly as the target.
@@ -379,7 +398,7 @@ class Simulator:
         small_mask = target_count <= 2
 
         k = min(self.num_search_actions, probs.shape[-1])
-        _, topk_idx = torch.topk(probs, k=k, dim=-1)
+        topk_idx = self._sample_action_indices(probs, k)
         hidden_idx = self._sample_targets(states["target_mask"])
         scores = self._rollout_scores(model, data, states, base_actions, topk_idx, hidden_idx)
 
