@@ -25,7 +25,6 @@ class SimulatorConfig(Config):
             lam: float = 0.95,
             m: int = 3,
             num_search_actions: int = 10,
-            target_temperature: float = 1.0,
             reward_blend_factor: float = 1.0,
             value_blend_factor: float = 1.0,
             advantage_type: str = "reward-telescoped-value-baseline",
@@ -43,7 +42,6 @@ class SimulatorConfig(Config):
         self.lam = lam
         self.m = m
         self.num_search_actions = num_search_actions
-        self.target_temperature = target_temperature
         self.reward_blend_factor = reward_blend_factor
         self.value_blend_factor = value_blend_factor
         # Deprecated advantage-normalization options are still accepted for
@@ -68,7 +66,6 @@ class Simulator:
         self.lam = self.cfg.lam
         self.m = self.cfg.m
         self.num_search_actions = self.cfg.num_search_actions
-        self.target_temperature = self.cfg.target_temperature
         self.reward_blend_factor = self.cfg.reward_blend_factor
         self.value_blend_factor = self.cfg.value_blend_factor
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
@@ -397,9 +394,6 @@ class Simulator:
 
         return states, responses
     
-    def _clone_states(self, states):
-        return {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in states.items()}
-
     def _actions_from_guess_idx(self, base_actions, guess_idx):
         V = base_actions["policy_probs"].shape[-1]
         actions = {}
@@ -424,6 +418,10 @@ class Simulator:
         *base_shape, K = topk_idx.shape
         M = hidden_idx.shape[-1]
         device = states["t"].device
+        if tuple(states["t"].shape) != tuple(base_shape):
+            raise ValueError(f"Expected top-k base shape {tuple(states['t'].shape)}, got {tuple(base_shape)}")
+        if tuple(hidden_idx.shape[:-1]) != tuple(base_shape):
+            raise ValueError(f"Expected hidden sample base shape {tuple(base_shape)}, got {tuple(hidden_idx.shape[:-1])}")
         rollout_states = {
             "t": expand_var(expand_var(states["t"], -1, K), -1, M),
             "last_guess": expand_var(expand_var(states["last_guess"], -1, K), -1, M),
@@ -438,6 +436,8 @@ class Simulator:
         rollout_data = self.loader._idx2data(rollout_states["idx"])
         rollout_data = move_to(rollout_data, data["total"]["tensor"].device)
         first_guess_idx = topk_idx.unsqueeze(-1).expand(*base_shape, K, M)
+        if tuple(first_guess_idx.shape) != (*base_shape, K, M):
+            raise ValueError(f"Unexpected first action expansion shape: {tuple(first_guess_idx.shape)}")
         rollout_actions = self._actions_from_guess_idx(base_actions, first_guess_idx)
 
         scores = torch.zeros((*base_shape, K, M), dtype=self.fp_dtype, device=device)
@@ -456,8 +456,10 @@ class Simulator:
         """
         Refine the model policy with policy-guided complete rollouts.
 
-        The top-k model actions are scored against m uniformly sampled feasible
-        hidden targets. Only the probability mass already assigned to those top-k
+        The top-k model actions are selected from the alpha/temperature-adjusted
+        policy, then scored against m uniformly sampled feasible hidden targets.
+        Every action after the proposed first action is chosen by a fully
+        deterministic argmax policy. Only the probability mass already assigned to those top-k
         actions is redistributed according to rollout score; all non-selected
         action probabilities are left unchanged. For states with <=2 feasible
         targets, the normalized target mask is used directly as the target.
@@ -474,7 +476,7 @@ class Simulator:
 
         refined = probs.clone()
         selected_mass = probs.gather(-1, topk_idx).sum(dim=-1, keepdim=True)
-        topk_probs = F.softmax(scores / max(self.target_temperature, self.eps), dim=-1) * selected_mass
+        topk_probs = F.softmax(scores, dim=-1) * selected_mass
         refined.scatter_(-1, topk_idx, topk_probs)
 
         target_probs = torch.where(

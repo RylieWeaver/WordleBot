@@ -84,7 +84,6 @@ if __name__ == '__main__':
             max_guesses=6,
             m=32,
             num_search_actions=10,
-            target_temperature=1.0,
         )
         loss_cfg = WordleLossConfig(
             loss_weights={
