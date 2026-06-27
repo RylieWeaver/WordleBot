@@ -86,12 +86,11 @@ class TrainerConfig(Config):
 
 
 class Trainer:
-    def __init__(self, cfg, ref_model, model, best_model, device: Union[str, torch.device] = "cpu") -> None:
+    def __init__(self, cfg, ref_model, model, device: Union[str, torch.device] = "cpu") -> None:
         # Read vars
         self.cfg = cfg
         self.ref_model = ref_model.to(device).eval()
         self.model = model.to(device)
-        self.best_model = best_model.to(device).eval()
         self.device = device
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
         self.amp_dtype = None if self.cfg.amp_dtype in {None, "none"} else getattr(torch, self.cfg.amp_dtype)
@@ -117,7 +116,7 @@ class Trainer:
     overwriting something after loading from checkpoint.
     """
     def __reinit__(self):
-        self.__init__(self.cfg, self.ref_model, self.model, self.best_model, self.device)
+        self.__init__(self.cfg, self.ref_model, self.model, self.device)
 
     def state_dict(self):
         return {
@@ -160,13 +159,11 @@ class Trainer:
         self.scheduler.cfg.save(save_dir / "scheduler_config.json")
         self.logger.cfg.save(save_dir / "logger_config.json")
 
-        # Save models (ref, current, best)
+        # Save models
         self.ref_model.cfg.save(save_dir / "ref_model_config.json")
         torch.save(self.ref_model.state_dict(), save_dir / "ref_model.pt")
         self.model.cfg.save(save_dir / "model_config.json")
         torch.save(self.model.state_dict(), save_dir / "model.pt")
-        self.best_model.cfg.save(save_dir / "best_model_config.json")
-        torch.save(self.best_model.state_dict(), save_dir / "best_model.pt")
 
         # Save trainer
         self.cfg.save(save_dir / "trainer_config.json")
@@ -198,7 +195,7 @@ class Trainer:
             model.load_state_dict(state_dict)
             return model
 
-        # Load models (ref, current, best)
+        # Load models
         ref_model = load_model_ckpt(
             model_cfg_path=(load_dir / "ref_model_config.json"),
             model_state_path=(load_dir / "ref_model.pt"),
@@ -211,17 +208,10 @@ class Trainer:
             model_state_path=(load_dir / "model.pt"),
             device=device
         )
-        best_model = load_model_ckpt(
-            model_cfg_path=(load_dir / "best_model_config.json"),
-            model_state_path=(load_dir / "best_model.pt"),
-            device=device
-        )
-        for param in best_model.parameters():
-            param.requires_grad = False
 
         # Load trainer
         trainer_cfg = TrainerConfig.load(load_dir / "trainer_config.json")
-        trainer = Trainer(trainer_cfg, ref_model, model, best_model, device)
+        trainer = Trainer(trainer_cfg, ref_model, model, device)
         trainer_state = torch.load(load_dir / "trainer.pt", map_location=device)
         trainer.load_state_dict(trainer_state)
 
@@ -252,8 +242,6 @@ class Trainer:
                     with torch.no_grad():
                         states = move_to(states, self.ref_model.device)
                         ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                        states = move_to(states, self.best_model.device)
-                        best_probs, _ = self.best_model.predict(states, alpha, temp)
                 
                 # Increment loss
                 states = move_to(states, self.device)
@@ -261,14 +249,13 @@ class Trainer:
                 responses = self._float32_tree(move_to(responses, self.device))
                 probs = self._float32_tree(move_to(probs, self.device))
                 ref_probs = self._float32_tree(move_to(ref_probs, self.device))
-                best_probs = self._float32_tree(move_to(best_probs, self.device))
                 batch_loss, batch_loss_components = self.loss.inc_loss(
-                    states, actions, responses, probs, ref_probs, best_probs
+                    states, actions, responses, probs, ref_probs
                 )
 
                 # Measure grad norms
                 if measure_grad_norms:
-                    self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, best_probs, alpha, temp)
+                    self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, alpha, temp)
                 return batch_loss, batch_loss_components
             except RuntimeError as e:
                 if attempt < self.cfg.max_batch_attempts:
@@ -296,8 +283,6 @@ class Trainer:
             with torch.no_grad():
                 states = move_to(states, self.ref_model.device)
                 ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                states = move_to(states, self.best_model.device)
-                best_probs, _ = self.best_model.predict(states, alpha, temp)
         
         # Measure grad norms
         states = move_to(states, self.device)
@@ -305,8 +290,7 @@ class Trainer:
         responses = self._float32_tree(move_to(responses, self.device))
         probs = self._float32_tree(move_to(probs, self.device))
         ref_probs = self._float32_tree(move_to(ref_probs, self.device))
-        best_probs = self._float32_tree(move_to(best_probs, self.device))
-        self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs, best_probs)
+        self.loss.measure_grad_norms(self.model, states, actions, responses, probs, ref_probs)
 
     def _loop_without_grad(self, loader, desc, alpha=None, temp=None):
         self.loss.init_cumulative_loss()
@@ -374,9 +358,12 @@ class Trainer:
         test_loss, test_loss_components = self._loop_without_grad(loader=test_loader, desc="Evaluating", alpha=0.0, temp=1.0)
         self.logger.log(
             f"[Epoch {epoch}][Eval] Accuracy: {test_acc:.4f} | Avg Guesses: {test_avg_guesses:.4f} | "
-            f"Actor Loss: {test_loss_components['actor']:.6f} | Critic Loss: {test_loss_components['critic']:.6f} | "
-            f"Entropy Loss: {test_loss_components['entropy']:.6f} | KL Reg Loss: {test_loss_components['kl_reg']:.6f} | "
-            f"KL Guide Loss: {test_loss_components['kl_guide']:.6f} | KL Best Loss: {test_loss_components['kl_best']:.6f} "
+            f"Search KL: {test_loss_components['search_kl']:.6f} | Entropy Loss: {test_loss_components['entropy']:.6f} | "
+            f"KL Reg Loss: {test_loss_components['kl_reg']:.6f} | KL Guide Loss: {test_loss_components['kl_guide']:.6f} | "
+            f"Search Cosine: {test_loss_components['search_cosine']:.6f} | "
+            f"Unique States: {test_loss_components['unique_state_pct']:.2f}% | "
+            f"Search Score Mean: {test_loss_components['search_score_mean']:.6f} | "
+            f"Search Score Std: {test_loss_components['search_score_std']:.6f}"
         )
         # Explicitly cleanup eval objects (prevents OOM and semaphore leaks)
         del test_loader; del test_dataset; del test_episodes; gc.collect()
@@ -414,10 +401,12 @@ class Trainer:
             desc = f"Rollout {i}"
             rollout_loss, rollout_loss_components = self._loop_with_grad(loader=processing_loader, desc=desc)
             self.logger.log(
-                f"[Epoch {epoch}][{desc}] Loss: {rollout_loss:.6f} | Actor Loss: {rollout_loss_components['actor']:.6f} | "
-                f"Critic Loss: {rollout_loss_components['critic']:.6f} | Entropy Loss: {rollout_loss_components['entropy']:.6f} | "
-                f"KL Reg Loss: {rollout_loss_components['kl_reg']:.6f} | KL Guide Loss: {rollout_loss_components['kl_guide']:.6f} | "
-                f"KL Best Loss: {rollout_loss_components['kl_best']:.6f}"
+                f"[Epoch {epoch}][{desc}] Loss: {rollout_loss:.6f} | Search KL: {rollout_loss_components['search_kl']:.6f} | "
+                f"Entropy Loss: {rollout_loss_components['entropy']:.6f} | KL Reg Loss: {rollout_loss_components['kl_reg']:.6f} | "
+                f"KL Guide Loss: {rollout_loss_components['kl_guide']:.6f} | Search Cosine: {rollout_loss_components['search_cosine']:.6f} | "
+                f"Unique States: {rollout_loss_components['unique_state_pct']:.2f}% | "
+                f"Search Score Mean: {rollout_loss_components['search_score_mean']:.6f} | "
+                f"Search Score Std: {rollout_loss_components['search_score_std']:.6f}"
             )
         # Explicitly cleanup the rollout objects (prevents OOM and semaphore leaks)
         del processing_loader; del rollout_dataset; del rollout_episodes; gc.collect()
@@ -444,7 +433,7 @@ class Trainer:
         while self.last_epoch < end_epoch:
             epoch = self.last_epoch + 1
 
-            # Update ref model
+            # Update KL reference model
             self.ref_model.load_state_dict(self.model.state_dict())
 
             # Run epoch
@@ -459,15 +448,14 @@ class Trainer:
 
             # Best model checkpointing
             if self.cfg.checkpoint_dir:
-                new_best_model = (
+                new_best_checkpoint = (
                     test_acc > self.best_accuracy or
                     test_acc == self.best_accuracy and test_guesses < self.best_avg_guesses
                 )
-                if new_best_model:
+                if new_best_checkpoint:
                     self.best_accuracy = test_acc
                     self.best_avg_guesses = test_guesses
                     self.save_checkpoint(epoch)
-                    self.best_model.load_state_dict(self.model.state_dict())
 
             # Increment epoch
             self.last_epoch = epoch
