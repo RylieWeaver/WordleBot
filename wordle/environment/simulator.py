@@ -2,7 +2,6 @@
 import math
 from tqdm import tqdm
 from typing import Union
-import warnings
 
 
 # Torch
@@ -22,14 +21,8 @@ class SimulatorConfig(Config):
             correct_reward: float = 0.1,
             correct_blend_factor: float = 1.0,
             max_guesses: int = 6,
-            gamma: float = 0.20,
-            lam: float = 0.95,
             m: int = 3,
-            reward_blend_factor: float = 1.0,
-            value_blend_factor: float = 1.0,
-            advantage_type: str = "reward-telescoped-value-baseline",
-            adv_mean_reduce_dims: Union[tuple, list, int, None] = (2,),
-            adv_std_reduce_dims: Union[tuple, list, int, None] = (0, 2),
+            num_search_actions: int = 10,
             fp_dtype: str = 'float32',
         ):
         self.loader_cfg = loader_cfg if loader_cfg is not None else WordleLoaderConfig()
@@ -38,38 +31,9 @@ class SimulatorConfig(Config):
         self.correct_reward = correct_reward
         self.correct_blend_factor = correct_blend_factor
         self.max_guesses = max_guesses
-        self.gamma = gamma
-        self.lam = lam
         self.m = m
-        self.reward_blend_factor = reward_blend_factor
-        self.value_blend_factor = value_blend_factor
-        self.advantage_type = self._as_advantage_type(advantage_type)
-        self.adv_mean_reduce_dims = self._as_reduce_dims(adv_mean_reduce_dims)
-        self.adv_std_reduce_dims = self._as_reduce_dims(adv_std_reduce_dims)
+        self.num_search_actions = num_search_actions
         self.fp_dtype = fp_dtype
-
-    def _as_advantage_type(self, advantage_type):
-        aliases = {
-            "reward-telecoped": "reward-telescoped",
-            "reward-telecoped-value-baseline": "reward-telescoped-value-baseline",
-        }
-        advantage_type = aliases.get(advantage_type, advantage_type)
-        valid = {
-            "gae",
-            "reward-total",
-            "reward-telescoped",
-            "reward-telescoped-value-baseline",
-        }
-        if advantage_type not in valid:
-            raise ValueError(f"Unknown advantage_type: {advantage_type}. Valid options are {sorted(valid)}")
-        return advantage_type
-
-    def _as_reduce_dims(self, reduce_dims):
-        if reduce_dims is None:
-            return None
-        if isinstance(reduce_dims, int):
-            return (reduce_dims,)
-        return tuple(reduce_dims)
 
 
 class Simulator:
@@ -85,14 +49,8 @@ class Simulator:
         self.correct_reward = self.cfg.correct_reward
         self.correct_blend_factor = self.cfg.correct_blend_factor
         self.max_guesses = self.cfg.max_guesses
-        self.gamma = self.cfg.gamma
-        self.lam = self.cfg.lam
         self.m = self.cfg.m
-        self.reward_blend_factor = self.cfg.reward_blend_factor
-        self.value_blend_factor = self.cfg.value_blend_factor
-        self.advantage_type = self.cfg.advantage_type
-        self.adv_mean_reduce_dims = self.cfg.adv_mean_reduce_dims
-        self.adv_std_reduce_dims = self.cfg.adv_std_reduce_dims
+        self.num_search_actions = self.cfg.num_search_actions
         self.fp_dtype = getattr(torch, self.cfg.fp_dtype)
         self.eps = 1e-8
 
@@ -296,74 +254,19 @@ class Simulator:
         idx[~enough] = torch.multinomial(mask_f[~enough], m, replacement=True)
         return idx
     
-    def _target_expansion(self, states, actions, m):
+    def step(self, model, data, states, actions, calculate_reward=True):
         """
-        Expand the states to have an additional dimension of size m for candidate target words.
-        """
-        idx = self._sample_targets(states["target_mask"])                                           # [B, m]
-        cand_data = self.loader._idx2data(idx)                                                      # dict with [B, m] batch idx for target and total
-        cand_states = {
-            "t": expand_var(states["t"], dim=-1, size=m),                                           # [B, *, m]
-            "alphabet": expand_var(states["alphabet"], dim=-3, size=m),                             # [B, *, m, 26, 11]
-            "active_mask": expand_var(states["active_mask"], dim=-1, size=m),                       # [B, *, m]
-            "guessed_mask": expand_var(states["guessed_mask"], dim=-2, size=m),                     # [B, *, m, V]
-            "target_mask": expand_var(states["target_mask"], dim=-2, size=m),                       # [B, *, m, T]
-            "total_target_mask": expand_var(states["total_target_mask"], dim=-2, size=m),           # [B, *, m, V]
-            "entropy": expand_var(states["entropy"], dim=-1, size=m),                               # [B, *, m]
-            "idx": idx,                                                                             # [B, *, m]
-        }
-        cand_actions = {
-            "policy_probs": expand_var(actions["policy_probs"], dim=-2, size=m),                    # [B, *, m, V]
-            "policy_probs_masked": expand_var(actions["policy_probs_masked"], dim=-2, size=m),      # [B, *, m, V]
-            "mixed_probs": expand_var(actions["mixed_probs"], dim=-2, size=m),                      # [B, *, m, V]
-            "mixed_probs_masked": expand_var(actions["mixed_probs_masked"], dim=-2, size=m),        # [B, *, m, V]
-            "guess_idx": expand_var(actions["guess_idx"], dim=-1, size=m),                          # [B, *, m]
-            "guess_mask": expand_var(actions["guess_mask"], dim=-2, size=m),                        # [B, *, m, V]
-            "valid_mask": expand_var(actions["valid_mask"], dim=-2, size=m),                        # [B, *, m, V]
-        }
-        return cand_data, cand_states, cand_actions
+        Simulate one Wordle step for the actual hidden target in ``data``.
 
-    def step(self, model, data, states, actions):
-        """
-        Simulate one Wordle step
-
-        Data:
-        - target:
-            - states: [T, 26, 11]
-            - tensor: [T, 5]
-        - total:
-            - states: [V, 26, 11]
-            - tensor: [V, 5]
-        
-        States:
-        - t: [B, *] (int)
-        - last_guess: [B, *] (bool)
-        - alphabet: [B, *, 26, 11]
-        - active_mask: [B, *]
-        - guessed_mask: [B, *, V]
-        - target_mask: [B, *, T]
-        - total_target_mask: [B, *, V]
-        - entropy: [B, *]
-
-        Returns:
-        - updated states
-        - responses:
-            - values: [B, *]
-            - rewards: [B, *]
-            - expected_values: [B, *]
-            - expected_rewards: [B, *]
-            - correct: [B, *]
+        This intentionally does not expand over sampled target candidates. Search
+        rollouts already expand states over [top-k actions, sampled hidden targets],
+        so doing another m-way expansion here would multiply memory by m again.
         """
         # Setup
         T = data["target"]["size"]
         V = data["total"]["size"]
 
-        # Simulate possible target words given the target mask
-        cand_data, cand_states, cand_actions = self._target_expansion(states, actions, self.m)
-        cand_data = move_to(cand_data, data["total"]["tensor"].device)
-        cand_states = move_to(cand_states, states["alphabet"].device)
-
-        # Update what we can in states before simulating response 
+        # Update what we can in states before simulating response
         # (t, alphabet, guessed_mask, active_mask)
         states["t"] = states["t"] + 1
         states["alphabet"] = self._update_alphabet(data, states, actions)           # [B, *, 26, 11]
@@ -371,26 +274,16 @@ class Simulator:
         states["guessed_mask"] = states["guessed_mask"] | F.one_hot(                # [B, *, V]
             actions["guess_idx"], num_classes=V
         ).bool()
-        cand_states["t"] = cand_states["t"] + 1
-        cand_states["alphabet"] = self._update_alphabet(                            # [B, *, m, 26, 11]
-            cand_data, cand_states, cand_actions
-        )
-        states["last_guess"] = (states["t"] == self.max_guesses)                    # [B, *]
-        cand_states["guessed_mask"] = cand_states["guessed_mask"] | F.one_hot(      # [B, *, m, V]
-            cand_actions["guess_idx"], num_classes=V
-        ).bool()
 
-        # Calculate responses
-        # NOTE: The model only requires updated t/alphabet for value estimates
-        with torch.no_grad():
-            _, values = model(states)                                               # [B, *]
-            _, cand_values = model(cand_states)                                     # [B, *, m]
+        # Calculate transition. Rewards are only needed for search rollouts; episode
+        # collection only needs the updated target mask and correctness for state
+        # progression/statistics.
         rewards, new_entropy, new_target_mask, correct = (                          # [B, *], [B, *], [B, *, T]
             self._calculate_rewards(data, states, actions)
         )
-        cand_rewards, _, _, _ = (                                                   # [B, *, m]
-            self._calculate_rewards(cand_data, cand_states, cand_actions)
-        )
+        if not calculate_reward:
+            rewards = torch.zeros_like(rewards)
+
         # NOTE: Right-padding requires the convention of targets first in the total vocab
         new_total_target_mask = F.pad(new_target_mask, (0, V - T)).bool()           # [B, *, V]
 
@@ -410,126 +303,113 @@ class Simulator:
 
         # Collect responses
         responses = {
-            "values": values,                                                       # [B, *]
             "rewards": rewards,                                                     # [B, *]
-            "expected_values": cand_values.mean(dim=-1),                            # [B, *]
-            "expected_rewards": cand_rewards.mean(dim=-1),                          # [B, *]
             "correct": correct                                                      # [B, *]
         }
 
         return states, responses
     
-    def _masked_mean(self, x, mask, reduce_dims):
-        if reduce_dims is None:
-            return torch.zeros((), dtype=x.dtype, device=x.device), None
-        count = mask.sum(dim=reduce_dims, keepdim=True)
-        mean = (x * mask).sum(dim=reduce_dims, keepdim=True) / count.clamp_min(1.0)
-        mean = torch.where(count > 0, mean, torch.zeros_like(mean))
-        return mean, count
-    
-    def _masked_std(self, x, mask, reduce_dims):
-        if reduce_dims is None:
-            return torch.ones((), dtype=x.dtype, device=x.device), None
-        mean, count = self._masked_mean(x, mask, reduce_dims)
-        ss_res = (((x - mean) * mask) ** 2).sum(dim=reduce_dims, keepdim=True)
-        std = torch.sqrt(ss_res / count.clamp_min(1.0)).clamp_min(self.eps)
-        std = torch.where(count > 0, std, torch.ones_like(std))
-        return std, count
-    
-    def norm_advantages(self, advantages, active_mask):                              # [B, G, R] (both)
-        adv_mean, mean_count = self._masked_mean(                                    # [*, *, *]
-            advantages, active_mask, self.adv_mean_reduce_dims
-        )
-        adv_std, std_count = self._masked_std(                                       # [*, *, *]
-            advantages, active_mask, self.adv_std_reduce_dims
-        )
+    def _actions_from_guess_idx(self, base_actions, guess_idx):
+        # Rollout steps only need the selected word indices. Avoid expanding full
+        # probability tensors to [batch, repeats, top-k, m, vocab], which is the
+        # main avoidable OOM risk in search target construction.
+        V = base_actions["policy_probs"].shape[-1]
+        return {
+            "guess_idx": guess_idx,
+            "guess_mask": F.one_hot(guess_idx, num_classes=V).bool(),
+        }
 
-        # Default normalization to 0/1 when there aren't enough active games
-        # NOTE: Skip zero active because then there's just no episode
-        min_adv_count = 2
-        if mean_count is not None:
-            mean_leq_min = (mean_count > 0) & (mean_count < min_adv_count)
-            if mean_leq_min.any():
-                warnings.warn(
-                    f"Mean advantage count is < {min_adv_count} for \
-                    {mean_leq_min.sum().item()} groups. Defaulting to 0 mean advantage."
-                )
-                adv_mean = torch.where(mean_leq_min, torch.zeros_like(adv_mean), adv_mean).detach()
-        if std_count is not None:
-            std_leq_min = (std_count > 0) & (std_count < min_adv_count)
-            if std_leq_min.any():
-                warnings.warn(
-                    f"Std advantage count is < {min_adv_count} for \
-                    {std_leq_min.sum().item()} groups. Defaulting to 1 std advantage."
-                )
-                adv_std = torch.where(std_leq_min, torch.ones_like(adv_std), adv_std).detach()
+    def _sample_action_indices(self, probs, k):
+        """Sample k proposed rollout actions with replacement from the policy."""
+        *base_shape, V = probs.shape
+        idx = torch.multinomial(probs.reshape(-1, V), k, replacement=True)
+        return idx.reshape(*base_shape, k)
 
-        # Apply normalization
-        norm_advantages = ((advantages - adv_mean) / adv_std) * active_mask           # [B, G, R]
-        return norm_advantages, adv_mean, adv_std
-    
-    def calculate_advantages(self, responses, active_mask):
-        # Read
-        rewards = responses["rewards"]                      # [B, G, *]
-        values = responses["values"]                        # [B, G+1, *]
-        expected_rewards = responses["expected_rewards"]    # [B, G, *]
-        expected_values = responses["expected_values"]      # [B, G, *]
-        active = active_mask[:, :-1, ...].float()           # [B, G, *]
-        next_active = active_mask[:, 1:, ...].float()       # [B, G, *]
-        
-        # Setup
-        B, _, *dims = active_mask.shape
-        G = self.max_guesses
-        device = rewards.device
+    def _rollout_scores(self, model, data, states, base_actions, topk_idx, hidden_idx):
+        """
+        Score each proposed first action by averaging full-rollout reward over
+        uniformly sampled feasible hidden targets. Shapes are [B, K, M].
+        """
+        *base_shape, K = topk_idx.shape
+        M = hidden_idx.shape[-1]
+        device = states["t"].device
+        if tuple(states["t"].shape) != tuple(base_shape):
+            raise ValueError(f"Expected top-k base shape {tuple(states['t'].shape)}, got {tuple(base_shape)}")
+        if tuple(hidden_idx.shape[:-1]) != tuple(base_shape):
+            raise ValueError(f"Expected hidden sample base shape {tuple(base_shape)}, got {tuple(hidden_idx.shape[:-1])}")
+        rollout_states = {
+            "t": expand_var(expand_var(states["t"], -1, K), -1, M),
+            "last_guess": expand_var(expand_var(states["last_guess"], -1, K), -1, M),
+            "alphabet": expand_var(expand_var(states["alphabet"], -3, K), -3, M),
+            "active_mask": expand_var(expand_var(states["active_mask"], -1, K), -1, M),
+            "guessed_mask": expand_var(expand_var(states["guessed_mask"], -2, K), -2, M),
+            "target_mask": expand_var(expand_var(states["target_mask"], -2, K), -2, M),
+            "total_target_mask": expand_var(expand_var(states["total_target_mask"], -2, K), -2, M),
+            "entropy": expand_var(expand_var(states["entropy"], -1, K), -1, M),
+            "idx": expand_var(hidden_idx, -2, K),
+        }
+        rollout_data = self.loader._idx2data(rollout_states["idx"])
+        rollout_data = move_to(rollout_data, data["total"]["tensor"].device)
+        first_guess_idx = topk_idx.unsqueeze(-1).expand(*base_shape, K, M)
+        if tuple(first_guess_idx.shape) != (*base_shape, K, M):
+            raise ValueError(f"Unexpected first action expansion shape: {tuple(first_guess_idx.shape)}")
+        rollout_actions = self._actions_from_guess_idx(base_actions, first_guess_idx)
 
-        # Blend and mask the tensors
-        # NOTE: Important for advantages to not be influenced by values/rewards after an episode finishes!
-        blended_rewards = (                                                             # [B, G, *]
-            self.reward_blend_factor * expected_rewards +
-            (1 - self.reward_blend_factor) * rewards
-        ) * active
-        blended_next_values = (                                                         # [B, G, *]
-            self.value_blend_factor * expected_values +
-            (1 - self.value_blend_factor) * values[:, 1:, ...]
-        ).detach() * next_active
-        current_values = (values[:, :-1, ...] * active).detach()                        # [B, G, *]
+        scores = torch.zeros((*base_shape, K, M), dtype=self.fp_dtype, device=device)
+        active_before = rollout_states["active_mask"].float()
+        rollout_states, responses = self.step(model, rollout_data, rollout_states, rollout_actions)
+        scores = scores + (responses["rewards"] * active_before)
 
-        # Compute returns and advantages
-        if self.advantage_type == "gae":
-            advantages = torch.zeros((B, G, *dims), dtype=self.fp_dtype, device=device)
-            gae = torch.zeros((B, *dims), dtype=self.fp_dtype, device=device)
-            for t in reversed(range(G)):
-                delta = (
-                    blended_rewards[:, t, ...] +
-                    self.gamma * blended_next_values[:, t, ...] -
-                    current_values[:, t, ...]
-                )
-                gae = delta + self.gamma * self.lam * next_active[:, t, ...] * gae
-                advantages[:, t, ...] = gae
-            advantages = advantages * active
-            returns = (advantages + current_values) * active
-        elif self.advantage_type == "reward-total":
-            returns = blended_rewards.sum(dim=1, keepdim=True).expand(B, G, *dims) * active
-            advantages = returns
-        elif self.advantage_type in {"reward-telescoped", "reward-telescoped-value-baseline"}:
-            returns = torch.zeros((B, G, *dims), dtype=self.fp_dtype, device=device)
-            running_return = torch.zeros((B, *dims), dtype=self.fp_dtype, device=device)
-            for t in reversed(range(G)):
-                running_return = blended_rewards[:, t, ...] + self.gamma * running_return
-                returns[:, t, ...] = running_return
-            returns = returns * active
-            if self.advantage_type == "reward-telescoped-value-baseline":
-                advantages = (returns - current_values) * active
-            else:
-                advantages = returns
+        for _ in range(self.max_guesses - 1):
+            if not rollout_states["active_mask"].any():
+                break
+            active_before = rollout_states["active_mask"].float()
+            rollout_actions = model.sample(rollout_states, alpha=0.0, temperature=1.0, argmax=True)
+            rollout_states, responses = self.step(model, rollout_data, rollout_states, rollout_actions)
+            scores = scores + (responses["rewards"] * active_before)
+        return scores.mean(dim=-1)
+
+    def search_actions(self, model, data, states, alpha, temperature, argmax=False):
+        """
+        Choose a continuation action with policy-guided complete rollouts.
+
+        k model actions are sampled with replacement from the
+        alpha/temperature-adjusted policy, then scored against m uniformly
+        sampled feasible hidden targets. Duplicate sampled actions have their
+        rollout scores averaged. The continuation action is selected from those
+        sampled actions by score, not by building a redistributed training target.
+        For states with <=2 feasible targets, choose directly from the target mask.
+        """
+        base_actions = model.sample(states, alpha, temperature, argmax=False)
+        probs = base_actions["policy_probs_masked"]
+        target_count = states["target_mask"].sum(dim=-1)
+        small_mask = target_count <= 2
+
+        k = min(self.num_search_actions, probs.shape[-1])
+        topk_idx = self._sample_action_indices(probs, k)
+        hidden_idx = self._sample_targets(states["target_mask"])
+        scores = self._rollout_scores(model, data, states, base_actions, topk_idx, hidden_idx)
+
+        score_sum = torch.zeros_like(probs)
+        score_count = torch.zeros_like(probs)
+        score_sum.scatter_add_(-1, topk_idx, scores)
+        score_count.scatter_add_(-1, topk_idx, torch.ones_like(scores))
+        selected_mask = score_count > 0
+        mean_scores = score_sum / score_count.clamp_min(1.0)
+        masked_scores = mean_scores.masked_fill(~selected_mask, torch.finfo(mean_scores.dtype).min)
+
+        if argmax:
+            guess_idx = masked_scores.argmax(dim=-1)
         else:
-            raise ValueError(f"Unknown advantage_type: {self.advantage_type}")
+            search_probs = F.softmax(masked_scores, dim=-1)
+            *dims, V = search_probs.shape
+            guess_idx = torch.multinomial(search_probs.reshape(-1, V), 1).squeeze(-1).reshape(*dims)
 
-        norm_advantages, adv_mean, adv_std = self.norm_advantages(advantages, active)
-        responses["returns"] = returns.detach()                                             # [B, G, *]
-        responses["advantages"] = advantages.detach()                                       # [B, G, *]
-        responses["norm_advantages"] = norm_advantages                                      # [B, G, *]
-        return responses
+        small_guess_idx = states["total_target_mask"].float().argmax(dim=-1)
+        guess_idx = torch.where(small_mask, small_guess_idx, guess_idx)
+        base_actions["guess_idx"] = guess_idx
+        base_actions["guess_mask"] = F.one_hot(guess_idx, num_classes=probs.shape[-1]).bool()
+        return base_actions
     
     def collect_episodes_mb(self, model, data, alpha, temperature, argmax=False):
         """We keep the entire episodes on CPU, then states, actions, responses on Model device"""
@@ -554,11 +434,12 @@ class Simulator:
             #       the episodes after collecting.
             # while (states["t"] <= G).all() and states["active_mask"].any():
             for t in range(1, G+1):
-                # Select actions = f(states)
+                # Select collection actions directly from the model. Search targets are built later
+                # when processing the collected states for training/evaluation loss.
                 actions = model.sample(states, alpha, temperature, argmax=argmax)
 
                 # Simulate responses = f(states, actions)
-                states, responses = self.step(model, data, states, actions)
+                states, responses = self.step(model, data, states, actions, calculate_reward=False)
 
                 # Store
                 self._append_dict(episodes["states"], move_to(states, "cpu"))
@@ -589,11 +470,68 @@ class Simulator:
         episodes["actions"] = self._cat_dict(episodes["actions"], dim=0)
         episodes["responses"] = self._cat_dict(episodes["responses"], dim=0)    
 
-        # Calculate advantages
-        episodes["responses"] = self.calculate_advantages(
-            episodes["responses"], episodes["states"]["active_mask"]
-        )    
         return episodes
+
+    def _clone_tensor_dict(self, values):
+        return {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in values.items()}
+
+    def _slice_actions_at_turn(self, actions, turn):
+        return {k: v[:, turn, ...] if isinstance(v, torch.Tensor) else v for k, v in actions.items()}
+
+    def search_continuation_return(self, model, data, states, first_actions=None):
+        """Return rollout reward after an optional forced first action.
+
+        The first action is either forced from collected exploration or chosen by
+        search. All following actions use search with argmax execution. Rewards
+        are accumulated only for paths active before each step, so the terminal
+        action reward is included and dead paths contribute nothing afterward.
+        """
+        rollout_states = self._clone_tensor_dict(states)
+        returns = torch.zeros_like(rollout_states["entropy"], dtype=self.fp_dtype)
+        next_actions = first_actions
+        with torch.no_grad():
+            for _ in range(self.max_guesses):
+                if not rollout_states["active_mask"].any():
+                    break
+                active_before = rollout_states["active_mask"].float()
+                if next_actions is None:
+                    next_actions = self.search_actions(
+                        model, data, rollout_states, alpha=0.0, temperature=1.0, argmax=True
+                    )
+                rollout_states, responses = self.step(
+                    model, data, rollout_states, next_actions, calculate_reward=True
+                )
+                returns = returns + (responses["rewards"] * active_before)
+                next_actions = None
+        return returns
+
+    def build_search_advantages_for_states(self, model, states, actions):
+        """Build Q_search - V_search advantages for collected state/action pairs."""
+        advantages = []
+        G = self.max_guesses
+        was_training = model.training
+        model.eval()
+        try:
+            with torch.no_grad():
+                for turn in range(G):
+                    turn_states = self._slice_states_at_turn(states, turn)
+                    turn_actions = self._slice_actions_at_turn(actions, turn)
+                    turn_data = self.loader._idx2data(turn_states["idx"])
+                    turn_data = move_to(turn_data, turn_states["t"].device)
+                    q_search = self.search_continuation_return(
+                        model, turn_data, turn_states, first_actions=turn_actions
+                    )
+                    v_search = self.search_continuation_return(
+                        model, turn_data, turn_states, first_actions=None
+                    )
+                    advantages.append(q_search - v_search)
+        finally:
+            model.train(was_training)
+
+        return {"advantages": torch.stack(advantages, dim=1)}
+
+    def _slice_states_at_turn(self, states, turn):
+        return {k: v[:, turn, ...] if isinstance(v, torch.Tensor) else v for k, v in states.items()}
 
     def process_episodes(
         self,
@@ -622,4 +560,6 @@ class Simulator:
 
         # Collect new responses
         responses["pred_values"] = (pred_values * active_mask.float())[:, :-1, ...]     # [B, G+1, *]                                               # [B, G, *]
+        search_advantages = self.build_search_advantages_for_states(model, states, actions)
+        responses.update(search_advantages)
         return probs, responses
