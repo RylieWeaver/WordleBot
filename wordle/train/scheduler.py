@@ -52,8 +52,7 @@ class Scheduler:
         self.alpha = self.init_alpha
         self.temperature = self.init_temperature
         self.best_metrics = {
-            "actor_loss": float('inf'),
-            "critic_loss": float('inf'),
+            "policy_gradient": float('inf'),
             "win_rate": 0.0,
             "avg_guesses": float('inf')
         }
@@ -103,11 +102,8 @@ class Scheduler:
         if avg_guesses < self.best_metrics["avg_guesses"]:
             self.best_metrics["avg_guesses"] = to_float(avg_guesses)
             no_improvement = False
-        if loss_components["actor"] < self.best_metrics["actor_loss"]:
-            self.best_metrics["actor_loss"] = to_float(loss_components["actor"])
-            no_improvement = False
-        if loss_components["critic"] < self.best_metrics["critic_loss"]:
-            self.best_metrics["critic_loss"] = to_float(loss_components["critic"])
+        if loss_components["policy_gradient"] < self.best_metrics["policy_gradient"]:
+            self.best_metrics["policy_gradient"] = to_float(loss_components["policy_gradient"])
             no_improvement = False
 
         # Update patience counter
@@ -131,8 +127,7 @@ class Scheduler:
                     print(f'  -> Evolved temperature: {self.temperature:.2f} -> {new_temperature:.2f}, alpha: {self.alpha:.2f} -> {self.alpha:.2f}')
                     self.temperature = new_temperature
                 self.steps_since_improvement = 0
-                self.best_metrics["actor_loss"] = float('inf')
-                self.best_metrics["critic_loss"] = float('inf')
+                self.best_metrics["policy_gradient"] = float('inf')
 
     def state_dict(self):
         return {
