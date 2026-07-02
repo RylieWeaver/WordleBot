@@ -114,7 +114,7 @@ python run_sweep.py \
   --slurm-qos YOUR_QOS \
   --slurm-time 24:00:00 \
   --slurm-cpus-per-task 8 \
-  --slurm-mem-per-gpu 20G \
+  --slurm-mem 90G \
   --slurm-pythonpath /path/to/WordleBot \
   --slurm-env-command "source <env-path>"
 ```
