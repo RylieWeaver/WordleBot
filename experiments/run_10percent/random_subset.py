@@ -1,19 +1,36 @@
 # General
+from pathlib import Path
 
 # Wordle
-from wordle.data import get_vocab, words_to_tensor, tensor_to_words
+from wordle.data import get_vocab
 
+
+RUN_DIR = Path(__file__).resolve().parent
+
+
+def write_vocab(path, vocab):
+    with path.open("w") as f:
+        for word in vocab:
+            f.write(f"{word}\n")
+
+
+def load_data(target_vocab_size=None, nontarget_vocab_size=None, targets_type="original"):
+    target_vocab = get_vocab(vocab_type="target", size=target_vocab_size, targets_type=targets_type)
+    nontarget_vocab = get_vocab(vocab_type="nontarget", size=nontarget_vocab_size)
+    total_vocab = list(target_vocab) + list(nontarget_vocab)
+    return total_vocab, target_vocab, nontarget_vocab
 
 
 def main():
-    # Data
-    total_vocab, target_vocab = get_vocab(guess_vocab_size=1066, target_vocab_size=232)  # Load a 10% subset of the original vocab (10657 non-target plus 2315 target)
-    with open('total_vocab_10percent.txt', 'w') as f:
-        for word in total_vocab:
-            f.write(f"{word}\n")
-    with open('target_vocab_10percent.txt', 'w') as f:
-        for word in target_vocab:
-            f.write(f"{word}\n")
+    total_vocab, target_vocab, nontarget_vocab = load_data(
+        target_vocab_size=232,
+        nontarget_vocab_size=1066,
+        targets_type="original",
+    )
+    write_vocab(RUN_DIR / "total_vocab_10percent.txt", total_vocab)
+    write_vocab(RUN_DIR / "target_vocab_10percent.txt", target_vocab)
+    write_vocab(RUN_DIR / "nontarget_vocab_10percent.txt", nontarget_vocab)
+
 
 if __name__ == "__main__":
     main()
