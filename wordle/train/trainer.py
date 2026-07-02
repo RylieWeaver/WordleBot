@@ -466,8 +466,8 @@ class Trainer:
                 if new_best_model:
                     self.best_accuracy = test_acc
                     self.best_avg_guesses = test_guesses
-                    self.save_checkpoint(epoch)
                     self.best_model.load_state_dict(self.model.state_dict())
+                    self.save_checkpoint(epoch)
 
             # Increment epoch
             self.last_epoch = epoch
