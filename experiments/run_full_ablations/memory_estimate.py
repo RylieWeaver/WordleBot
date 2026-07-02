@@ -22,6 +22,7 @@ RUN_DEFAULTS = {
     "loader-batch-size": 32,
     "processing-batch-size": 16,
     "repeats": 16,
+    "num-workers": 4,
     "max-guesses": 6,
 }
 
@@ -191,7 +192,7 @@ def estimate_host_episode_bytes(run_args, vocab_size, target_vocab_size):
         T * 26 * 11 * FP_BYTES +
         V * 26 * 11 * FP_BYTES
     )
-    dataloader_workers = max(_int_arg(run_args, "num-workers") if "num-workers" in run_args else 0, 0)
+    dataloader_workers = max(_int_arg(run_args, "num-workers"), 0)
     python_overhead = 2.0 * BYTES_PER_GB
 
     components = {
@@ -427,6 +428,7 @@ def build_parser():
     parser.add_argument("--loader-batch-size", type=int, default=RUN_DEFAULTS["loader-batch-size"])
     parser.add_argument("--processing-batch-size", type=int, default=RUN_DEFAULTS["processing-batch-size"])
     parser.add_argument("--repeats", type=int, default=RUN_DEFAULTS["repeats"])
+    parser.add_argument("--num-workers", type=int, default=RUN_DEFAULTS["num-workers"])
     parser.add_argument("--max-guesses", type=int, default=RUN_DEFAULTS["max-guesses"])
     parser.add_argument("--vocab-size", type=int, default=DEFAULT_VOCAB_SIZE)
     parser.add_argument("--target-vocab-size", type=int, default=DEFAULT_TARGET_VOCAB_SIZE)
@@ -617,6 +619,7 @@ def main():
             "loader-batch-size": args.loader_batch_size,
             "processing-batch-size": args.processing_batch_size,
             "repeats": args.repeats,
+            "num-workers": args.num_workers,
             "max-guesses": args.max_guesses,
         }
         result = row_for_args("single", 0, run_args, args)

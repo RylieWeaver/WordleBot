@@ -19,7 +19,13 @@ DEFAULT_ARGS = {
     "model-size-multiplier": 1.0,
     "layers": 3,
     "m": 3,
+    "loader-batch-size": 32,
+    "processing-batch-size": 16,
     "repeats": 16,
+    "num-workers": 4,
+    "max-guesses": 6,
+    "gamma": 1.0,
+    "lam": 1.0,
     "batches-per-gradient-step": 16,
     "rollout-size": 4,
     "correct-blend-factor": 1.0,
@@ -32,6 +38,7 @@ DEFAULT_ARGS = {
     "use-inductive-biases": True,
     "correct-reward": 0.1,
     "amp-dtype": "bfloat16",
+    "learning-rate": 1e-4,
 }
 
 def is_default_args(args):
@@ -72,6 +79,16 @@ def build_ablations():
 
     for m in [1, 2, 3, 4, 5]:
         item = ablation(f"m_{m}", {"m": m})
+        if item:
+            ablations.append(item)
+
+    for gamma in [0.2, 0.5, 1.0]:
+        item = ablation(f"gamma_{gamma:g}", {"gamma": gamma})
+        if item:
+            ablations.append(item)
+
+    for lam in [0.2, 0.5, 1.0]:
+        item = ablation(f"lambda_{lam:g}", {"lam": lam})
         if item:
             ablations.append(item)
 
@@ -399,7 +416,7 @@ def main():
 
             if args.dry_run:
                 print(f"[dry-run] {name} {run_name}", flush=True)
-                print(" ".join(cmd), flush=True)
+                print(shell_join(cmd), flush=True)
                 continue
 
             job_slug = slugify(f"wb_{ablation_slug}_{run_idx}")
@@ -497,6 +514,12 @@ def main():
                     raise SystemExit(result.returncode)
             append_sweep_log(sweep_log, f"[done] {name} {run_name}")
 
+    if args.start_at is not None and not started:
+        raise SystemExit(f"--start-at {args.start_at!r} did not match any ablation")
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        sys.stdout = open(os.devnull, "w")

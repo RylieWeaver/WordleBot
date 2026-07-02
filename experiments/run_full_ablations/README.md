@@ -1,0 +1,125 @@
+# Run Full Ablations
+
+Run all commands from this directory:
+
+```bash
+cd */WordleBot/experiments/run_full_ablations
+```
+
+If needed, activate the environment first:
+
+```bash
+source <env-path>
+```
+
+
+## Prepare Data
+
+Generate the local vocab files used by `run.py`:
+
+```bash
+python get_data.py
+```
+
+
+## Quick Test
+
+Run the full sweep plan without launching training:
+
+```bash
+python run_sweep.py --dry-run --epochs 5
+```
+
+Run one local sequential smoke test on a single visible GPU:
+
+```bash
+python run_sweep.py \
+  --launcher local \
+  --gpu 0 \
+  --epochs 5 \
+  --runs-per-ablation 3 \
+  --continue-on-error
+```
+
+
+## Memory Estimate
+
+Estimate memory first:
+
+```bash
+python memory_estimate.py --sweep --csv > memory_estimates.csv
+```
+
+
+## Local Sweep
+
+This runs one job at a time on one GPU:
+
+```bash
+python run_sweep.py \
+  --launcher local \
+  --gpu 0 \
+  --epochs 200 \
+  --runs-per-ablation 3 \
+  --continue-on-error \
+  --skip-completed
+```
+
+Outputs go under:
+
+- `logs/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY/`
+- `checkpoints/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY/`
+
+Use `--sweep-name my_name` to make the output directory explicit.
+
+
+## Slurm Sweep
+
+Submit one Slurm job per ablation seed/run:
+
+```bash
+python run_sweep.py \
+  --launcher slurm \
+  --epochs 200 \
+  --runs-per-ablation 3 \
+  --max-jobs 0 \
+  --slurm-time 24:00:00 \
+  --slurm-cpus-per-task 8 \
+  --slurm-mem-per-gpu 20G \
+  --slurm-env-command "source <env-path>"
+```
+
+Cluster-specific examples to adjust as needed:
+
+```bash
+python run_sweep.py \
+  --launcher slurm \
+  --slurm-partition gpu \
+  --slurm-account YOUR_ACCOUNT \
+  --slurm-gpu-directive "--gres=gpu:1" \
+  --slurm-extra-sbatch "--mail-type=END,FAIL"
+```
+
+Set `--max-jobs N` to throttle how many submitted jobs may be active at once.
+
+
+## Resume / Partial Runs
+
+Skip runs that already completed successfully:
+
+```bash
+python run_sweep.py --launcher local --skip-completed
+```
+
+Start at a specific ablation name:
+
+```bash
+python run_sweep.py --start-at model_size_4
+```
+
+Each run writes:
+
+- `metadata.json`: command, seed, ablation args
+- `status.json`: completion status and return code
+- `process.log`: stdout/stderr for that run
+- `sweep.log`: top-level launcher progress

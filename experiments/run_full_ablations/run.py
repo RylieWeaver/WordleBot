@@ -75,14 +75,14 @@ def build_parser():
         default="DotGuessStateNet",
         choices=("ActorCriticNet", "DotGuessStateNet", "WordleTransformer"),
     )
-    parser.add_argument("--model-size-multiplier", type=float, default=4.0)
+    parser.add_argument("--model-size-multiplier", type=float, default=1.0)
     parser.add_argument("--layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--use-inductive-biases", type=parse_bool, default=True)
 
     # Loader / simulator
     parser.add_argument("--loader-batch-size", type=int, default=32)
-    parser.add_argument("--repeats", type=int, default=32)
+    parser.add_argument("--repeats", type=int, default=16)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--max-guesses", type=int, default=6)
     parser.add_argument("--m", type=int, default=3)
@@ -106,7 +106,7 @@ def build_parser():
     parser.add_argument("--ratio-prob-clip", type=float, default=0.2)
 
     # Optimizer / scheduler
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--init-alpha", type=float, default=0.25)
@@ -121,7 +121,7 @@ def build_parser():
     # Trainer
     parser.add_argument("--processing-batch-size", type=int, default=16)
     parser.add_argument("--batches-per-gradient-step", type=int, default=16)
-    parser.add_argument("--rollout-size", type=int, default=6)
+    parser.add_argument("--rollout-size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--save-every", type=int, default=200)
     parser.add_argument("--amp-dtype", type=str, default="bfloat16", choices=("none", "bfloat16"))
