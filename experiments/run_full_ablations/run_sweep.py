@@ -333,57 +333,16 @@ def submit_slurm_job(script_path):
     return job_id, result.stdout.strip()
 
 
-def build_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--launcher", type=str, default="local", choices=("local", "slurm"))
-    parser.add_argument("--gpu", type=str, default="0")
-    parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--python", type=str, default=sys.executable)
-    parser.add_argument("--sweep-name", type=str, default=time.strftime("%Y%m%d_%H%M%S"))
-    parser.add_argument("--runs-per-ablation", type=int, default=3)
-    parser.add_argument("--base-seed", type=int, default=42)
-    parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--log-root", type=Path, default=Path("logs/ablations"))
-    parser.add_argument("--checkpoint-root", type=Path, default=Path("checkpoints/ablations"))
-    parser.add_argument("--start-at", type=str, default=None)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--skip-completed", action="store_true")
-    parser.add_argument("--continue-on-error", action="store_true")
-    parser.add_argument("--max-jobs", type=int, default=0)
-    parser.add_argument("--slurm-time", type=str, default="24:00:00")
-    parser.add_argument("--slurm-cpus-per-task", type=int, default=8)
-    parser.add_argument("--slurm-mem", type=str, default=None)
-    parser.add_argument("--slurm-mem-buffer", type=float, default=1.5)
-    parser.add_argument("--slurm-min-mem-gb", type=int, default=0)
-    parser.add_argument("--slurm-vocab-size", type=int, default=12972)
-    parser.add_argument("--slurm-target-vocab-size", type=int, default=2315)
-    parser.add_argument("--slurm-gpu-directive", type=str, default="--gres=gpu:1")
-    parser.add_argument("--slurm-mem-per-gpu", type=str, default="20G")
-    parser.add_argument("--slurm-partition", type=str, default=None)
-    parser.add_argument("--slurm-account", type=str, default=None)
-    parser.add_argument("--slurm-qos", type=str, default=None)
-    parser.add_argument("--slurm-constraint", type=str, default=None)
-    parser.add_argument("--slurm-extra-sbatch", action="append", default=[])
-    parser.add_argument("--slurm-env-command", action="append", default=[])
-    parser.add_argument("--slurm-use-srun", type=parse_bool, default=True)
-    parser.add_argument("--slurm-poll-seconds", type=int, default=60)
-    return parser
-
-
-def main():
-    args = build_parser().parse_args()
-    sweep_log = RUN_DIR / args.log_root / args.sweep_name / "sweep.log"
-    env = os.environ.copy()
-    if args.launcher == "local":
-        env["CUDA_VISIBLE_DEVICES"] = args.gpu
-    env["PYTHONUNBUFFERED"] = "1"
-    submitted_job_ids = []
-
+def build_run_specs(args, sweep_log):
+    specs = []
     started = args.start_at is None
+    matched_start = args.start_at is None
+
     for ablation_idx, ablation in enumerate(ABLATIONS):
         name = ablation["name"]
         if not started:
             started = name == args.start_at
+            matched_start = started
             if not started:
                 continue
 
@@ -417,108 +376,255 @@ def main():
             ]
             add_cli_args(cmd, ablation_args)
 
-            if args.dry_run:
-                print(f"[dry-run] {name} {run_name}", flush=True)
-                print(shell_join(cmd), flush=True)
-                continue
-
             job_slug = slugify(f"wb_{ablation_slug}_{run_idx}")
-            job_name = job_slug[:128]
-            mem = slurm_mem(args, ablation_args)
-            slurm_script_path = RUN_DIR / log_dir / "job.sbatch"
-            meta = {
-                "ablation": name,
+            specs.append({
+                "name": name,
                 "ablation_args": ablation_args,
                 "run_idx": run_idx,
+                "run_name": run_name,
                 "seed": seed,
-                "epochs": args.epochs,
-                "launcher": args.launcher,
-                "gpu": args.gpu if args.launcher == "local" else None,
                 "cmd": cmd,
-                "log_dir": str(log_dir),
-                "checkpoint_dir": str(checkpoint_dir),
-                "slurm_mem": mem if args.launcher == "slurm" else None,
-            }
-            write_json(RUN_DIR / log_dir / "metadata.json", meta)
+                "log_dir": log_dir,
+                "checkpoint_dir": checkpoint_dir,
+                "process_log_path": process_log_path,
+                "status_path": status_path,
+                "metadata_path": RUN_DIR / log_dir / "metadata.json",
+                "job_name": job_slug[:128],
+                "slurm_script_path": RUN_DIR / log_dir / "job.sbatch",
+                "meta": {
+                    "ablation": name,
+                    "ablation_args": ablation_args,
+                    "run_idx": run_idx,
+                    "seed": seed,
+                    "epochs": args.epochs,
+                    "launcher": args.launcher,
+                    "gpu": None,
+                    "cmd": cmd,
+                    "log_dir": str(log_dir),
+                    "checkpoint_dir": str(checkpoint_dir),
+                    "slurm_mem": None,
+                },
+            })
 
-            if args.launcher == "slurm":
-                process_log_path.parent.mkdir(parents=True, exist_ok=True)
-                status = {
-                    **meta,
-                    "status": "prepared",
-                    "returncode": None,
-                    "slurm_job_id": None,
-                    "slurm_script": str(slurm_script_path),
-                }
-                write_json(status_path, status)
-                write_slurm_script(
-                    slurm_script_path,
-                    args,
-                    job_name,
-                    cmd,
-                    meta,
-                    mem,
-                    RUN_DIR / status_path,
-                    process_log_path,
-                )
-                write_json(RUN_DIR / log_dir / "metadata.json", meta)
-                wait_for_slurm_slot(
-                    submitted_job_ids,
-                    args.max_jobs,
-                    args.slurm_poll_seconds,
-                    sweep_log,
-                )
-                job_id, submit_message = submit_slurm_job(slurm_script_path)
-                submitted_job_ids.append(job_id)
-                status.update({
-                    "status": "submitted",
-                    "slurm_job_id": job_id,
-                    "submit_message": submit_message,
-                    "submit_time": time.time(),
-                })
-                write_json(status_path, status)
-                append_sweep_log(sweep_log, f"[submit] {name} {run_name} job_id={job_id}")
-                append_sweep_log(sweep_log, shell_join(["sbatch", slurm_script_path]))
-                continue
+    return specs, matched_start
 
-            append_sweep_log(sweep_log, f"[start] {name} {run_name}")
-            append_sweep_log(sweep_log, shell_join(cmd))
 
-            start_time = time.time()
-            process_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with process_log_path.open("a") as process_log:
-                process_log.write(f"[start] {time.ctime(start_time)}\n")
-                process_log.write(shell_join(cmd) + "\n")
-                process_log.flush()
-                result = subprocess.run(
-                    cmd,
-                    cwd=RUN_DIR,
-                    env=env,
-                    stdout=process_log,
-                    stderr=subprocess.STDOUT,
-                    check=False,
-                )
-                end_time = time.time()
-                process_log.write(f"[end] {time.ctime(end_time)}\n")
-                process_log.write(f"[returncode] {result.returncode}\n")
+def parse_local_gpus(args):
+    value = args.gpus if args.gpus else args.gpu
+    gpus = [gpu.strip() for gpu in value.split(",") if gpu.strip()]
+    if not gpus:
+        raise SystemExit("Expected at least one GPU from --gpu or --gpus")
+    return gpus
 
-            status = {
-                **meta,
-                "start_time": start_time,
-                "end_time": end_time,
-                "elapsed_seconds": end_time - start_time,
-                "returncode": result.returncode,
-            }
-            write_json(status_path, status)
 
-            if result.returncode != 0:
-                append_sweep_log(sweep_log, f"[fail] {name} {run_name} rc={result.returncode}")
-                if not args.continue_on_error:
-                    raise SystemExit(result.returncode)
-            append_sweep_log(sweep_log, f"[done] {name} {run_name}")
+def launch_local_job(args, spec, gpu, sweep_log):
+    cmd = spec["cmd"]
+    meta = {**spec["meta"], "gpu": gpu}
+    write_json(spec["metadata_path"], meta)
 
-    if args.start_at is not None and not started:
+    append_sweep_log(sweep_log, f"[start gpu={gpu}] {spec['name']} {spec['run_name']}")
+    append_sweep_log(sweep_log, shell_join(cmd))
+
+    start_time = time.time()
+    process_log_path = spec["process_log_path"]
+    process_log_path.parent.mkdir(parents=True, exist_ok=True)
+    process_log = process_log_path.open("a")
+    process_log.write(f"[start] {time.ctime(start_time)}\n")
+    process_log.write(f"[gpu] {gpu}\n")
+    process_log.write(shell_join(cmd) + "\n")
+    process_log.flush()
+
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = gpu
+    env["PYTHONUNBUFFERED"] = "1"
+    process = subprocess.Popen(
+        cmd,
+        cwd=RUN_DIR,
+        env=env,
+        stdout=process_log,
+        stderr=subprocess.STDOUT,
+    )
+    return {
+        "spec": spec,
+        "gpu": gpu,
+        "meta": meta,
+        "process": process,
+        "process_log": process_log,
+        "start_time": start_time,
+    }
+
+
+def finish_local_job(job, returncode, sweep_log):
+    spec = job["spec"]
+    end_time = time.time()
+    process_log = job["process_log"]
+    process_log.write(f"[end] {time.ctime(end_time)}\n")
+    process_log.write(f"[returncode] {returncode}\n")
+    process_log.close()
+
+    status = {
+        **job["meta"],
+        "status": "completed",
+        "start_time": job["start_time"],
+        "end_time": end_time,
+        "elapsed_seconds": end_time - job["start_time"],
+        "returncode": returncode,
+    }
+    write_json(spec["status_path"], status)
+
+    if returncode == 0:
+        append_sweep_log(sweep_log, f"[done gpu={job['gpu']}] {spec['name']} {spec['run_name']}")
+    else:
+        append_sweep_log(sweep_log, f"[fail gpu={job['gpu']}] {spec['name']} {spec['run_name']} rc={returncode}")
+
+
+def run_local_jobs(args, specs, sweep_log):
+    gpus = parse_local_gpus(args)
+    append_sweep_log(sweep_log, f"[local] using gpus={','.join(gpus)}")
+
+    pending = list(specs)
+    running = {}
+    first_error = 0
+    stop_launching = False
+
+    while pending or running:
+        while pending and not stop_launching:
+            idle_gpus = [gpu for gpu in gpus if gpu not in running]
+            if not idle_gpus:
+                break
+            gpu = idle_gpus[0]
+            running[gpu] = launch_local_job(args, pending.pop(0), gpu, sweep_log)
+
+        if not running:
+            break
+
+        completed = []
+        for gpu, job in list(running.items()):
+            returncode = job["process"].poll()
+            if returncode is not None:
+                completed.append((gpu, job, returncode))
+
+        if not completed:
+            time.sleep(args.local_poll_seconds)
+            continue
+
+        for gpu, job, returncode in completed:
+            finish_local_job(job, returncode, sweep_log)
+            del running[gpu]
+            if returncode != 0 and first_error == 0:
+                first_error = returncode or 1
+            if returncode != 0 and not args.continue_on_error:
+                stop_launching = True
+
+    if first_error and not args.continue_on_error:
+        raise SystemExit(first_error)
+
+
+def submit_slurm_spec(args, spec, submitted_job_ids, sweep_log):
+    mem = slurm_mem(args, spec["ablation_args"])
+    meta = {**spec["meta"], "slurm_mem": mem}
+    write_json(spec["metadata_path"], meta)
+
+    process_log_path = spec["process_log_path"]
+    process_log_path.parent.mkdir(parents=True, exist_ok=True)
+    status = {
+        **meta,
+        "status": "prepared",
+        "returncode": None,
+        "slurm_job_id": None,
+        "slurm_script": str(spec["slurm_script_path"]),
+    }
+    write_json(spec["status_path"], status)
+    write_slurm_script(
+        spec["slurm_script_path"],
+        args,
+        spec["job_name"],
+        spec["cmd"],
+        meta,
+        mem,
+        spec["status_path"],
+        process_log_path,
+    )
+    write_json(spec["metadata_path"], meta)
+    wait_for_slurm_slot(
+        submitted_job_ids,
+        args.max_jobs,
+        args.slurm_poll_seconds,
+        sweep_log,
+    )
+    job_id, submit_message = submit_slurm_job(spec["slurm_script_path"])
+    submitted_job_ids.append(job_id)
+    status.update({
+        "status": "submitted",
+        "slurm_job_id": job_id,
+        "submit_message": submit_message,
+        "submit_time": time.time(),
+    })
+    write_json(spec["status_path"], status)
+    append_sweep_log(sweep_log, f"[submit] {spec['name']} {spec['run_name']} job_id={job_id}")
+    append_sweep_log(sweep_log, shell_join(["sbatch", spec["slurm_script_path"]]))
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--launcher", type=str, default="local", choices=("local", "slurm"))
+    parser.add_argument("--gpu", type=str, default="0")
+    parser.add_argument("--gpus", type=str, default=None)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--python", type=str, default=sys.executable)
+    parser.add_argument("--sweep-name", type=str, default=time.strftime("%Y%m%d_%H%M%S"))
+    parser.add_argument("--runs-per-ablation", type=int, default=3)
+    parser.add_argument("--base-seed", type=int, default=42)
+    parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--log-root", type=Path, default=Path("logs/ablations"))
+    parser.add_argument("--checkpoint-root", type=Path, default=Path("checkpoints/ablations"))
+    parser.add_argument("--start-at", type=str, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-completed", action="store_true")
+    parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument("--max-jobs", type=int, default=0)
+    parser.add_argument("--slurm-time", type=str, default="24:00:00")
+    parser.add_argument("--slurm-cpus-per-task", type=int, default=8)
+    parser.add_argument("--slurm-mem", type=str, default=None)
+    parser.add_argument("--slurm-mem-buffer", type=float, default=1.5)
+    parser.add_argument("--slurm-min-mem-gb", type=int, default=0)
+    parser.add_argument("--slurm-vocab-size", type=int, default=12972)
+    parser.add_argument("--slurm-target-vocab-size", type=int, default=2315)
+    parser.add_argument("--slurm-gpu-directive", type=str, default="--gres=gpu:1")
+    parser.add_argument("--slurm-mem-per-gpu", type=str, default="20G")
+    parser.add_argument("--slurm-partition", type=str, default=None)
+    parser.add_argument("--slurm-account", type=str, default=None)
+    parser.add_argument("--slurm-qos", type=str, default=None)
+    parser.add_argument("--slurm-constraint", type=str, default=None)
+    parser.add_argument("--slurm-extra-sbatch", action="append", default=[])
+    parser.add_argument("--slurm-env-command", action="append", default=[])
+    parser.add_argument("--slurm-use-srun", type=parse_bool, default=True)
+    parser.add_argument("--slurm-poll-seconds", type=int, default=60)
+    parser.add_argument("--local-poll-seconds", type=int, default=5)
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+    sweep_log = RUN_DIR / args.log_root / args.sweep_name / "sweep.log"
+    specs, matched_start = build_run_specs(args, sweep_log)
+
+    if args.start_at is not None and not matched_start:
         raise SystemExit(f"--start-at {args.start_at!r} did not match any ablation")
+
+    if args.dry_run:
+        for spec in specs:
+            print(f"[dry-run] {spec['name']} {spec['run_name']}", flush=True)
+            print(shell_join(spec["cmd"]), flush=True)
+        return
+
+    if args.launcher == "slurm":
+        submitted_job_ids = []
+        for spec in specs:
+            submit_slurm_spec(args, spec, submitted_job_ids, sweep_log)
+        return
+
+    run_local_jobs(args, specs, sweep_log)
 
 
 if __name__ == "__main__":

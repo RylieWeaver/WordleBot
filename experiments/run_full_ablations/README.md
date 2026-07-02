@@ -65,6 +65,20 @@ python run_sweep.py \
   --skip-completed
 ```
 
+To run several local GPUs from one scheduler process, pass a comma-separated
+GPU list. Each child process sees its assigned GPU as `cuda:0`.
+
+```bash
+nohup python3 run_sweep.py \
+  --launcher local \
+  --gpus 4,5,6,7 \
+  --epochs 200 \
+  --runs-per-ablation 3 \
+  --continue-on-error \
+  --skip-completed \
+  > nohup.out 2>&1 &
+```
+
 Outputs go under:
 
 - `logs/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY/`
