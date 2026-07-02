@@ -90,19 +90,29 @@ python run_sweep.py \
   --epochs 200 \
   --runs-per-ablation 3 \
   --max-jobs 0 \
+  --slurm-account YOUR_PROJECT \
+  --slurm-partition YOUR_PARTITION \
+  --slurm-qos YOUR_QOS \
   --slurm-time 24:00:00 \
   --slurm-cpus-per-task 8 \
   --slurm-mem-per-gpu 20G \
   --slurm-env-command "source <env-path>"
 ```
 
+These map to Slurm's `-A`, `-p`, and `-q` fields:
+
+- `--slurm-account YOUR_PROJECT` writes `#SBATCH --account=YOUR_PROJECT`
+- `--slurm-partition YOUR_PARTITION` writes `#SBATCH --partition=YOUR_PARTITION`
+- `--slurm-qos YOUR_QOS` writes `#SBATCH --qos=YOUR_QOS`
+
 Cluster-specific examples to adjust as needed:
 
 ```bash
 python run_sweep.py \
   --launcher slurm \
-  --slurm-partition gpu \
   --slurm-account YOUR_ACCOUNT \
+  --slurm-partition gpu \
+  --slurm-qos normal \
   --slurm-gpu-directive "--gres=gpu:1" \
   --slurm-extra-sbatch "--mail-type=END,FAIL"
 ```

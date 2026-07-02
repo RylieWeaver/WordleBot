@@ -336,7 +336,7 @@ def submit_slurm_job(script_path):
 def build_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--launcher", type=str, default="local", choices=("local", "slurm"))
-    parser.add_argument("--gpu", type=str, default="3")
+    parser.add_argument("--gpu", type=str, default="0")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--python", type=str, default=sys.executable)
     parser.add_argument("--sweep-name", type=str, default=time.strftime("%Y%m%d_%H%M%S"))
