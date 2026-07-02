@@ -16,11 +16,12 @@ RUN_DIR = Path(__file__).resolve().parent
 
 DEFAULT_ARGS = {
     "model-name": "DotGuessStateNet",
-    "model-size-multiplier": 1.0,
+    "model-size-multiplier": 2.0,
     "layers": 3,
     "m": 3,
     "loader-batch-size": 32,
     "processing-batch-size": 16,
+    "processing-num-workers": 4,
     "repeats": 16,
     "num-workers": 4,
     "max-guesses": 6,
@@ -224,8 +225,6 @@ def slurm_directives(args, name, mem):
     ]
     if args.slurm_gpu_directive.lower() not in {"", "none"}:
         directives.append(f"#SBATCH {args.slurm_gpu_directive}")
-    if args.slurm_mem_per_gpu.lower() not in {"", "none"}:
-        directives.append(f"#SBATCH --mem-per-gpu={args.slurm_mem_per_gpu}")
     if args.slurm_partition:
         directives.append(f"#SBATCH --partition={args.slurm_partition}")
     if args.slurm_account:
@@ -247,6 +246,13 @@ def write_slurm_script(path, args, job_name, cmd, meta, mem, status_path, proces
     env_commands = "\n".join(args.slurm_env_command)
     if env_commands:
         env_commands += "\n"
+    pythonpath = ":".join(args.slurm_pythonpath)
+    pythonpath_command = None
+    if pythonpath:
+        pythonpath_command = (
+            f"export PYTHONPATH={shlex.quote(pythonpath)}"
+            "${PYTHONPATH:+:$PYTHONPATH}"
+        )
 
     lines = [
         *slurm_directives(args, job_name, mem),
@@ -257,6 +263,7 @@ def write_slurm_script(path, args, job_name, cmd, meta, mem, status_path, proces
         f"cd {shlex.quote(str(RUN_DIR))}",
         "export PYTHONUNBUFFERED=1",
         env_commands.rstrip(),
+        pythonpath_command,
         f"export STATUS_PATH={shlex.quote(str(status_path))}",
         f"export RUN_CMD={shlex.quote(cmd_text)}",
         "export START_TIME=$(date +%s)",
@@ -347,6 +354,9 @@ def build_run_specs(args, sweep_log):
                 continue
 
         ablation_args = ablation["args"]
+        run_args = dict(ablation_args)
+        if args.processing_num_workers is not None:
+            run_args["processing-num-workers"] = args.processing_num_workers
         ablation_slug = slugify(name)
         for run_idx in range(args.runs_per_ablation):
             seed = args.base_seed + 1000 * ablation_idx + run_idx
@@ -374,12 +384,12 @@ def build_run_specs(args, sweep_log):
                 "--log-dir", str(log_dir),
                 "--checkpoint-dir", str(checkpoint_dir),
             ]
-            add_cli_args(cmd, ablation_args)
+            add_cli_args(cmd, run_args)
 
             job_slug = slugify(f"wb_{ablation_slug}_{run_idx}")
             specs.append({
                 "name": name,
-                "ablation_args": ablation_args,
+                "ablation_args": run_args,
                 "run_idx": run_idx,
                 "run_name": run_name,
                 "seed": seed,
@@ -393,7 +403,7 @@ def build_run_specs(args, sweep_log):
                 "slurm_script_path": RUN_DIR / log_dir / "job.sbatch",
                 "meta": {
                     "ablation": name,
-                    "ablation_args": ablation_args,
+                    "ablation_args": run_args,
                     "run_idx": run_idx,
                     "seed": seed,
                     "epochs": args.epochs,
@@ -582,6 +592,7 @@ def build_parser():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-completed", action="store_true")
     parser.add_argument("--continue-on-error", action="store_true")
+    parser.add_argument("--processing-num-workers", type=int, default=None)
     parser.add_argument("--max-jobs", type=int, default=0)
     parser.add_argument("--slurm-time", type=str, default="24:00:00")
     parser.add_argument("--slurm-cpus-per-task", type=int, default=8)
@@ -591,13 +602,13 @@ def build_parser():
     parser.add_argument("--slurm-vocab-size", type=int, default=12972)
     parser.add_argument("--slurm-target-vocab-size", type=int, default=2315)
     parser.add_argument("--slurm-gpu-directive", type=str, default="--gres=gpu:1")
-    parser.add_argument("--slurm-mem-per-gpu", type=str, default="20G")
     parser.add_argument("--slurm-partition", type=str, default=None)
     parser.add_argument("--slurm-account", type=str, default=None)
     parser.add_argument("--slurm-qos", type=str, default=None)
     parser.add_argument("--slurm-constraint", type=str, default=None)
     parser.add_argument("--slurm-extra-sbatch", action="append", default=[])
     parser.add_argument("--slurm-env-command", action="append", default=[])
+    parser.add_argument("--slurm-pythonpath", action="append", default=[])
     parser.add_argument("--slurm-use-srun", type=parse_bool, default=True)
     parser.add_argument("--slurm-poll-seconds", type=int, default=60)
     parser.add_argument("--local-poll-seconds", type=int, default=5)

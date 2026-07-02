@@ -35,6 +35,7 @@ class TrainerConfig(Config):
             save_every: Optional[int] = None,
             fp_dtype: str = "float32",
             amp_dtype: str = "none",
+            processing_num_workers: int = 4,
             rest_computer: Optional[float] = 1e-3,
             max_batch_attempts: int = 3,
     ) -> None:
@@ -48,6 +49,7 @@ class TrainerConfig(Config):
         self.save_every = save_every
         self.fp_dtype = fp_dtype
         self.amp_dtype = amp_dtype
+        self.processing_num_workers = processing_num_workers
         self.rest_computer = rest_computer
         self.max_batch_attempts = max_batch_attempts
 
@@ -80,6 +82,7 @@ class TrainerConfig(Config):
             save_every=cfg.get("save_every", None),
             fp_dtype=cfg.get("fp_dtype", "float32"),
             amp_dtype=cfg.get("amp_dtype", "none"),
+            processing_num_workers=cfg.get("processing_num_workers", 4),
             rest_computer=cfg.get("rest_computer", 1e-3),
             max_batch_attempts=cfg.get("max_batch_attempts", 3),
         )
@@ -370,7 +373,12 @@ class Trainer:
 
         # Create dataset/loader for processing eval episodes
         test_dataset = EpisodesDataset(test_episodes)
-        test_loader = DataLoader(test_dataset, batch_size=self.cfg.processing_batch_size, shuffle=False, num_workers=0)
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=self.cfg.processing_batch_size,
+            shuffle=False,
+            num_workers=self.cfg.processing_num_workers,
+        )
         test_loss, test_loss_components = self._loop_without_grad(loader=test_loader, desc="Evaluating", alpha=0.0, temp=1.0)
         self.logger.log(
             f"[Epoch {epoch}][Eval] Accuracy: {test_acc:.4f} | Avg Guesses: {test_avg_guesses:.4f} | "
@@ -406,7 +414,12 @@ class Trainer:
         
         # Create dataset/loader for processing rollouts
         rollout_dataset = EpisodesDataset(rollout_episodes)
-        processing_loader = DataLoader(rollout_dataset, batch_size=self.cfg.processing_batch_size, shuffle=True, num_workers=0)
+        processing_loader = DataLoader(
+            rollout_dataset,
+            batch_size=self.cfg.processing_batch_size,
+            shuffle=True,
+            num_workers=self.cfg.processing_num_workers,
+        )
 
         # Perform updates over multiple passes
         self.model.train()

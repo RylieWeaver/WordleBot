@@ -16,11 +16,12 @@ DEFAULT_TARGET_VOCAB_SIZE = 2315
 
 RUN_DEFAULTS = {
     "model-name": "DotGuessStateNet",
-    "model-size-multiplier": 1.0,
+    "model-size-multiplier": 2.0,
     "layers": 3,
     "m": 3,
     "loader-batch-size": 32,
     "processing-batch-size": 16,
+    "processing-num-workers": 4,
     "repeats": 16,
     "num-workers": 4,
     "max-guesses": 6,
@@ -193,6 +194,7 @@ def estimate_host_episode_bytes(run_args, vocab_size, target_vocab_size):
         V * 26 * 11 * FP_BYTES
     )
     dataloader_workers = max(_int_arg(run_args, "num-workers"), 0)
+    processing_workers = max(_int_arg(run_args, "processing-num-workers"), 0)
     python_overhead = 2.0 * BYTES_PER_GB
 
     components = {
@@ -200,7 +202,7 @@ def estimate_host_episode_bytes(run_args, vocab_size, target_vocab_size):
         "host_actions_gb": _gb(G * rows * action_step),
         "host_responses_gb": _gb(response),
         "host_loader_vocab_gb": _gb(loader_vocab),
-        "host_worker_overhead_gb": dataloader_workers * 0.5,
+        "host_worker_overhead_gb": (dataloader_workers + processing_workers) * 0.5,
         "host_python_overhead_gb": _gb(python_overhead),
     }
     components["host_raw_gb"] = sum(components.values())
@@ -427,6 +429,7 @@ def build_parser():
     parser.add_argument("--m", type=int, default=RUN_DEFAULTS["m"])
     parser.add_argument("--loader-batch-size", type=int, default=RUN_DEFAULTS["loader-batch-size"])
     parser.add_argument("--processing-batch-size", type=int, default=RUN_DEFAULTS["processing-batch-size"])
+    parser.add_argument("--processing-num-workers", type=int, default=RUN_DEFAULTS["processing-num-workers"])
     parser.add_argument("--repeats", type=int, default=RUN_DEFAULTS["repeats"])
     parser.add_argument("--num-workers", type=int, default=RUN_DEFAULTS["num-workers"])
     parser.add_argument("--max-guesses", type=int, default=RUN_DEFAULTS["max-guesses"])
@@ -474,6 +477,7 @@ def row_for_args(name, ablation_idx, run_args, args):
         "repeats": _int_arg(run_args, "repeats"),
         "loader_batch_size": _int_arg(run_args, "loader-batch-size"),
         "processing_batch_size": _int_arg(run_args, "processing-batch-size"),
+        "processing_num_workers": _int_arg(run_args, "processing-num-workers"),
         "max_guesses": _int_arg(run_args, "max-guesses"),
         "vocab_size": args.vocab_size,
         "target_vocab_size": args.target_vocab_size,
@@ -542,6 +546,7 @@ def print_csv(rows):
         "repeats",
         "loader_batch_size",
         "processing_batch_size",
+        "processing_num_workers",
         "max_guesses",
         "vocab_size",
         "target_vocab_size",
@@ -618,6 +623,7 @@ def main():
             "m": args.m,
             "loader-batch-size": args.loader_batch_size,
             "processing-batch-size": args.processing_batch_size,
+            "processing-num-workers": args.processing_num_workers,
             "repeats": args.repeats,
             "num-workers": args.num_workers,
             "max-guesses": args.max_guesses,

@@ -74,10 +74,15 @@ nohup python3 run_sweep.py \
   --gpus 4,5,6,7 \
   --epochs 200 \
   --runs-per-ablation 3 \
+  --processing-num-workers 4 \
   --continue-on-error \
   --skip-completed \
   > nohup.out 2>&1 &
 ```
+
+`--num-workers` controls the rollout data loader. `--processing-num-workers`
+controls the `EpisodesDataset` loaders used for eval and rollout processing.
+The processing worker default is `4`.
 
 Outputs go under:
 
@@ -110,6 +115,7 @@ python run_sweep.py \
   --slurm-time 24:00:00 \
   --slurm-cpus-per-task 8 \
   --slurm-mem-per-gpu 20G \
+  --slurm-pythonpath /path/to/WordleBot \
   --slurm-env-command "source <env-path>"
 ```
 
@@ -118,6 +124,13 @@ These map to Slurm's `-A`, `-p`, and `-q` fields:
 - `--slurm-account YOUR_PROJECT` writes `#SBATCH --account=YOUR_PROJECT`
 - `--slurm-partition YOUR_PARTITION` writes `#SBATCH --partition=YOUR_PARTITION`
 - `--slurm-qos YOUR_QOS` writes `#SBATCH --qos=YOUR_QOS`
+
+By default, generated jobs request regular Slurm memory with `#SBATCH --mem=...`
+using the estimator in `memory_estimate.py`. Override it with `--slurm-mem 90G`
+if needed.
+
+Use `--slurm-pythonpath /path/to/WordleBot` if the repo is not installed in the
+activated environment. Multiple `--slurm-pythonpath` values are joined with `:`.
 
 Cluster-specific examples to adjust as needed:
 
@@ -128,6 +141,7 @@ python run_sweep.py \
   --slurm-partition gpu \
   --slurm-qos normal \
   --slurm-gpu-directive "--gres=gpu:1" \
+  --slurm-pythonpath /path/to/WordleBot \
   --slurm-extra-sbatch "--mail-type=END,FAIL"
 ```
 

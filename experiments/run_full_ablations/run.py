@@ -75,7 +75,7 @@ def build_parser():
         default="DotGuessStateNet",
         choices=("ActorCriticNet", "DotGuessStateNet", "WordleTransformer"),
     )
-    parser.add_argument("--model-size-multiplier", type=float, default=1.0)
+    parser.add_argument("--model-size-multiplier", type=float, default=2.0)
     parser.add_argument("--layers", type=int, default=3)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--use-inductive-biases", type=parse_bool, default=True)
@@ -120,6 +120,7 @@ def build_parser():
 
     # Trainer
     parser.add_argument("--processing-batch-size", type=int, default=16)
+    parser.add_argument("--processing-num-workers", type=int, default=4)
     parser.add_argument("--batches-per-gradient-step", type=int, default=16)
     parser.add_argument("--rollout-size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)
@@ -252,6 +253,7 @@ def build_fresh_trainer(args, device):
     )
     trainer_cfg = TrainerConfig(
         processing_batch_size=args.processing_batch_size,
+        processing_num_workers=args.processing_num_workers,
         batches_per_gradient_step=args.batches_per_gradient_step,
         rollout_size=args.rollout_size,
         simulator_cfg=simulator_cfg,
