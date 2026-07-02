@@ -32,6 +32,7 @@ DEFAULT_ARGS = {
     "reward-blend-factor": 1.0,
     "value-blend-factor": 1.0,
     "kl-guide-loss-weight": 0.25,
+    "kl-best-loss-weight": 0.10,
     "adv-mean-reduce-dims": "2",
     "adv-std-reduce-dims": "0,2",
     "advantage-type": "gae",
@@ -93,6 +94,7 @@ def build_ablations():
             ablations.append(item)
 
     ablations.append({"name": "correct_reward_0", "args": {"correct-reward": 0.0}})
+    ablations.append({"name": "kl_best_loss_weight_0", "args": {"kl-best-loss-weight": 0.0}})
 
     # NOTE: Define a contour for equal batch size and episodes per rollout
     repeat_contour = [
@@ -409,6 +411,7 @@ def main():
                 "--device", args.device,
                 "--seed", str(seed),
                 "--epochs", str(args.epochs),
+                "--save-every", str(args.epochs),
                 "--log-dir", str(log_dir),
                 "--checkpoint-dir", str(checkpoint_dir),
             ]

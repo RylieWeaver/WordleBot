@@ -70,6 +70,13 @@ Outputs go under:
 - `logs/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY/`
 - `checkpoints/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY/`
 
+By default, the sweep passes `--save-every <epochs>`, so the scheduled checkpoint
+is at the final epoch for each run. Additional checkpoint directories can still
+appear when a new best eval is found.
+
+- best checkpoints use the normal `epoch_N/` directory format
+- final checkpoints use the same `epoch_N/` format, usually `epoch_200/`
+
 Use `--sweep-name my_name` to make the output directory explicit.
 
 
@@ -115,6 +122,12 @@ Start at a specific ablation name:
 
 ```bash
 python run_sweep.py --start-at model_size_4
+```
+
+Resume a run from a checkpoint:
+
+```bash
+python run.py --resume-from epoch_200 --checkpoint-dir checkpoints/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY
 ```
 
 Each run writes:
