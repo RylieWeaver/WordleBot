@@ -25,7 +25,7 @@ class WordleLossConfig(Config):
             loss_weights: dict = None,
             ratio_prob_clip: float = 0.2,
             min_prob_clip: float = -0.01,
-            max_prob_clip: float = 0.95,
+            max_prob_clip: float = 1.01,
             eps: float = 1e-12,
             clamp: float = 1e-12
     ):
