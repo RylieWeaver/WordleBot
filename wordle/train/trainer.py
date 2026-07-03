@@ -150,6 +150,18 @@ class Trainer:
             return tuple(self._float32_tree(v) for v in obj)
         return obj
 
+    def _episodes_loader_kwargs(self, shuffle: bool):
+        num_workers = self.cfg.processing_num_workers
+        kwargs = {
+            "batch_size": self.cfg.processing_batch_size,
+            "shuffle": shuffle,
+            "num_workers": num_workers,
+            "pin_memory": self.amp_device_type == "cuda",
+        }
+        if num_workers > 0:
+            kwargs["persistent_workers"] = True
+        return kwargs
+
     def save_checkpoint(self, epoch: int):
         # Setup
         save_dir = Path(self.cfg.checkpoint_dir) / f"epoch_{epoch}" if self.cfg.checkpoint_dir else None
@@ -249,18 +261,18 @@ class Trainer:
                 actions = episodes["actions"]
 
                 # Forward episodes through models
-                episodes = move_to(episodes, self.model.device)
+                episodes = move_to(episodes, self.model.device, non_blocking=True)
                 with self._amp_context():
                     probs, responses = self.simulator.process_episodes(self.model, episodes, alpha, temp)
                     with torch.no_grad():
-                        states = move_to(states, self.ref_model.device)
+                        states = move_to(states, self.ref_model.device, non_blocking=True)
                         ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                        states = move_to(states, self.best_model.device)
+                        states = move_to(states, self.best_model.device, non_blocking=True)
                         best_probs, _ = self.best_model.predict(states, alpha, temp)
                 
                 # Increment loss
                 states = move_to(states, self.device)
-                actions = move_to(actions, self.device)
+                actions = move_to(actions, self.device, non_blocking=True)
                 responses = self._float32_tree(move_to(responses, self.device))
                 probs = self._float32_tree(move_to(probs, self.device))
                 ref_probs = self._float32_tree(move_to(ref_probs, self.device))
@@ -293,18 +305,18 @@ class Trainer:
         actions = episodes_batch["actions"]
 
         # Forward episodes through models
-        episodes_batch = move_to(episodes_batch, self.model.device)
+        episodes_batch = move_to(episodes_batch, self.model.device, non_blocking=True)
         with self._amp_context():
             probs, responses = self.simulator.process_episodes(self.model, episodes_batch, alpha, temp)
             with torch.no_grad():
-                states = move_to(states, self.ref_model.device)
+                states = move_to(states, self.ref_model.device, non_blocking=True)
                 ref_probs, _ = self.ref_model.predict(states, alpha, temp)
-                states = move_to(states, self.best_model.device)
+                states = move_to(states, self.best_model.device, non_blocking=True)
                 best_probs, _ = self.best_model.predict(states, alpha, temp)
         
         # Measure grad norms
         states = move_to(states, self.device)
-        actions = move_to(actions, self.device)
+        actions = move_to(actions, self.device, non_blocking=True)
         responses = self._float32_tree(move_to(responses, self.device))
         probs = self._float32_tree(move_to(probs, self.device))
         ref_probs = self._float32_tree(move_to(ref_probs, self.device))
@@ -375,9 +387,7 @@ class Trainer:
         test_dataset = EpisodesDataset(test_episodes)
         test_loader = DataLoader(
             test_dataset,
-            batch_size=self.cfg.processing_batch_size,
-            shuffle=False,
-            num_workers=self.cfg.processing_num_workers,
+            **self._episodes_loader_kwargs(shuffle=False),
         )
         test_loss, test_loss_components = self._loop_without_grad(loader=test_loader, desc="Evaluating", alpha=0.0, temp=1.0)
         self.logger.log(
@@ -416,9 +426,7 @@ class Trainer:
         rollout_dataset = EpisodesDataset(rollout_episodes)
         processing_loader = DataLoader(
             rollout_dataset,
-            batch_size=self.cfg.processing_batch_size,
-            shuffle=True,
-            num_workers=self.cfg.processing_num_workers,
+            **self._episodes_loader_kwargs(shuffle=True),
         )
 
         # Perform updates over multiple passes
