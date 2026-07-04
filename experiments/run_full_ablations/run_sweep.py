@@ -381,6 +381,7 @@ def build_run_specs(args, sweep_log):
                 "--seed", str(seed),
                 "--epochs", str(args.epochs),
                 "--save-every", str(args.epochs),
+                "--save-best", cli_value(args.save_best),
                 "--log-dir", str(log_dir),
                 "--checkpoint-dir", str(checkpoint_dir),
             ]
@@ -586,6 +587,7 @@ def build_parser():
     parser.add_argument("--runs-per-ablation", type=int, default=3)
     parser.add_argument("--base-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--save-best", type=parse_bool, default=False)
     parser.add_argument("--log-root", type=Path, default=Path("logs/ablations"))
     parser.add_argument("--checkpoint-root", type=Path, default=Path("checkpoints/ablations"))
     parser.add_argument("--start-at", type=str, default=None)

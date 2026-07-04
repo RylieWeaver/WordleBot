@@ -1,5 +1,6 @@
 # General
 import gc
+import sys
 import time, json
 from tqdm import tqdm
 from pathlib import Path
@@ -33,6 +34,7 @@ class TrainerConfig(Config):
             logger_cfg: LoggerConfig = None,
             checkpoint_dir: Optional[Union[Path, str]] = None,
             save_every: Optional[int] = None,
+            save_best: bool = True,
             fp_dtype: str = "float32",
             amp_dtype: str = "none",
             processing_num_workers: int = 4,
@@ -47,6 +49,7 @@ class TrainerConfig(Config):
         if self.checkpoint_dir:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.save_every = save_every
+        self.save_best = save_best
         self.fp_dtype = fp_dtype
         self.amp_dtype = amp_dtype
         self.processing_num_workers = processing_num_workers
@@ -80,6 +83,7 @@ class TrainerConfig(Config):
             logger_cfg=LoggerConfig(**cfg.get("logger_cfg", {})),
             checkpoint_dir=cfg.get("checkpoint_dir", None),
             save_every=cfg.get("save_every", None),
+            save_best=cfg.get("save_best", True),
             fp_dtype=cfg.get("fp_dtype", "float32"),
             amp_dtype=cfg.get("amp_dtype", "none"),
             processing_num_workers=cfg.get("processing_num_workers", 4),
@@ -326,7 +330,7 @@ class Trainer:
     def _loop_without_grad(self, loader, desc, alpha=None, temp=None):
         self.loss.init_cumulative_loss()
         with torch.no_grad():
-            for episodes_batch in tqdm(loader, desc=desc, leave=False):
+            for episodes_batch in tqdm(loader, desc=desc, leave=False, disable=not sys.stderr.isatty()):
                 self._run_batch(episodes_batch, alpha=alpha, temp=temp)
             # Rest computer to prevent overheating (rough estimate of compute load is batch_size * repeats)
             if self.cfg.rest_computer:
@@ -341,7 +345,7 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         num_batches = len(loader)
 
-        for i, episodes_batch in enumerate(tqdm(loader, desc=desc, leave=False)):
+        for i, episodes_batch in enumerate(tqdm(loader, desc=desc, leave=False, disable=not sys.stderr.isatty())):
             batch_loss, batch_loss_components = self._run_batch(episodes_batch)
             mb_size = episodes_batch["states"]["active_mask"].shape[0]
             batch_scale = (mb_size / loader.batch_size) * (1.0 / self.cfg.batches_per_gradient_step)
@@ -488,7 +492,8 @@ class Trainer:
                     self.best_accuracy = test_acc
                     self.best_avg_guesses = test_guesses
                     self.best_model.load_state_dict(self.model.state_dict())
-                    self.save_checkpoint(epoch)
+                    if self.cfg.save_best:
+                        self.save_checkpoint(epoch)
 
             # Increment epoch
             self.last_epoch = epoch

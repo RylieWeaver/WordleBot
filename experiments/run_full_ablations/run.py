@@ -125,6 +125,7 @@ def build_parser():
     parser.add_argument("--rollout-size", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--save-every", type=int, default=200)
+    parser.add_argument("--save-best", type=parse_bool, default=False)
     parser.add_argument("--amp-dtype", type=str, default="bfloat16", choices=("none", "bfloat16"))
     parser.add_argument("--rest-computer", type=float, default=0.0)
     parser.add_argument("--log-dir", type=Path, default=Path("logs/test"))
@@ -263,6 +264,7 @@ def build_fresh_trainer(args, device):
         logger_cfg=logger_cfg,
         checkpoint_dir=resolve_run_path(args.checkpoint_dir),
         save_every=args.save_every,
+        save_best=args.save_best,
         amp_dtype=args.amp_dtype,
         rest_computer=args.rest_computer,
     )

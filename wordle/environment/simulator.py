@@ -1,5 +1,6 @@
 # General
 import math
+import sys
 from tqdm import tqdm
 from typing import Union
 import warnings
@@ -577,7 +578,7 @@ class Simulator:
         episodes = move_to(episodes, model.device)
 
         # Collect by minibatch
-        for data in tqdm(self.loader, desc=desc, leave=False):
+        for data in tqdm(self.loader, desc=desc, leave=False, disable=not sys.stderr.isatty()):
             episodes_mb = self.collect_episodes_mb(
                 model, data, alpha, temperature, argmax=argmax
             )

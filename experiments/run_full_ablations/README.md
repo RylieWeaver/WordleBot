@@ -90,8 +90,10 @@ Outputs go under:
 - `checkpoints/ablations/<sweep-name>/<ablation>/run_XX_seed_YYYY/`
 
 By default, the sweep passes `--save-every <epochs>`, so the scheduled checkpoint
-is at the final epoch for each run. Additional checkpoint directories can still
-appear when a new best eval is found.
+is at the final epoch for each run. Ablation runs also default to
+`--save-best false`, which keeps in-memory best model updates while avoiding
+best-checkpoint writes. Pass `--save-best true` to write full checkpoints when a
+new best eval is found.
 
 - best checkpoints use the normal `epoch_N/` directory format
 - final checkpoints use the same `epoch_N/` format, usually `epoch_200/`
