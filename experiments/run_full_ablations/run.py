@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 # Wordle
-from wordle.data import get_vocab, words_to_tensor, WordleLoaderConfig
+from wordle.data import words_to_tensor, WordleLoaderConfig
 from wordle.environment import SimulatorConfig
 from wordle.model import (
     ActorCriticNetConfig, ActorCriticNet,
@@ -50,6 +50,18 @@ def parse_reduce_dims(value):
 def resolve_run_path(path):
     path = Path(path)
     return path if path.is_absolute() else RUN_DIR / path
+
+
+def load_vocab_file(path):
+    with path.open("r") as f:
+        return np.array([line.strip() for line in f if line.strip()])
+
+
+def load_data():
+    target_vocab = load_vocab_file(RUN_DIR / "target_vocab.txt")
+    nontarget_vocab = load_vocab_file(RUN_DIR / "nontarget_vocab.txt")
+    total_vocab = np.concatenate((target_vocab, nontarget_vocab), axis=0)
+    return total_vocab, target_vocab, nontarget_vocab
 
 
 def set_seed(seed):
@@ -193,9 +205,7 @@ def log_model_stats(trainer):
 
 
 def build_fresh_trainer(args, device):
-    target_vocab = get_vocab(vocab_type="target")
-    nontarget_vocab = get_vocab(vocab_type="nontarget")
-    total_vocab = np.concatenate((target_vocab, nontarget_vocab), axis=0)
+    total_vocab, target_vocab, nontarget_vocab = load_data()
 
     total_vocab_tensor = words_to_tensor(total_vocab).to(device)
     ref_model, model, best_model = build_models(args, total_vocab, total_vocab_tensor, device)
